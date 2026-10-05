@@ -24,6 +24,7 @@ jobs:
           dotnet restore server --locked-mode
           dotnet build server -c Release --no-restore
           python3 tests/integration.py
+          python3 tests/test_sd_copy.py
       - name: Android build and lint
         working-directory: android
         run: ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug

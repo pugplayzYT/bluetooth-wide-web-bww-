@@ -4,6 +4,10 @@ Publish a small HTML/CSS/JavaScript site on your computer and browse it from a p
 
 The project includes a Windows console server, a standalone ESP32 + SD card host, and a native Android browser/editor. See [the ESP32 setup and wiring guide](esp32/README.md) for the PlatformIO C++ firmware and your GPIO5/18/23/19 wiring. The server is the authority for accounts and domains. `bww://garden.bww` is unique **on that computer**, not globally across every Bluetooth server. Connect to another computer to explore its sites; accounts and sessions are separate on each computer.
 
+## Copy between your computer and ESP32 SD card
+
+[Download BWW SD Copy](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-SD-Copy.zip), extract it, and run **Run-BWW-SD-Copy.bat** on Windows (Python 3.10+). Choose your computer's `store.json`, the SD card drive, and a copy direction. The tool previews changes, backs up the destination, and converts accounts/sites into the correct format. It never formats the card. Stop both hosts before copying. See [the short copy-tool guide](BWW_SD_COPY_README.md).
+
 ## Use the built app
 
 Build outputs in this workspace:

@@ -70,7 +70,7 @@ Persisted credentials contain salted password hashes and session-token digests; 
 
 ## Developer guide and validation
 
-Edit `include/BwwConfig.h` to change SD pins and limits (`MAX_BT_CLIENTS = 3`, `MAX_SITE_BYTES = 512 * 1024`). Pin changes also require rewiring; larger JSON limits consume ESP32 heap and must be tested on hardware. `src/BwwCore.cpp` and `src/BwwTransfers.cpp` implement the same operations documented in [../PROTOCOL.md](../PROTOCOL.md). `src/main.cpp` adapts SD storage and mbedTLS crypto; `src/BwwBluetooth.cpp` provides secure Classic SPP, numeric pairing confirmation, bounded receiving, and congestion-aware replies. The desktop and SD storage formats are intentionally separate; copying desktop `store.json` to the card is not an import.
+Edit `include/BwwConfig.h` to change SD pins and limits (`MAX_BT_CLIENTS = 3`, `MAX_SITE_BYTES = 512 * 1024`). Pin changes also require rewiring; larger JSON limits consume ESP32 heap and must be tested on hardware. `src/BwwCore.cpp` and `src/BwwTransfers.cpp` implement the same operations documented in [../PROTOCOL.md](../PROTOCOL.md). `src/main.cpp` adapts SD storage and mbedTLS crypto; `src/BwwBluetooth.cpp` provides secure Classic SPP, numeric pairing confirmation, bounded receiving, and congestion-aware replies. The desktop and SD storage formats are intentionally separate; copying desktop `store.json` to the card is not an import. Use [BWW SD Copy](../BWW_SD_COPY_README.md) to convert computer accounts/sites onto an already FAT32 card, or copy SD sites back to a computer.
 
 After installing PlatformIO dependencies, Linux developers can test the actual portable C++ core using g++ and OpenSSL development headers:
 
