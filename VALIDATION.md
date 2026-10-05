@@ -1,5 +1,13 @@
 # Validation
 
+## Bluetooth account website sync 0.5.0
+
+The PC Release build passed with zero warnings/errors, and the Windows x64 self-contained single-file publish produced a PE32+ executable. Six real PC wire-protocol scenarios passed, including authenticated fingerprints and conditional publication. Seven end-to-end sync scenarios passed using the actual C# sync console/client against the actual portable C++ firmware core over a loopback bridge: preview/cancellation, PC → ESP and repeat/no-op, ESP → PC with backups/credential preservation, a full 512 KiB Unicode round trip, source edits after comparison, destination edits before commit, ownership conflicts, authenticated manifests, chunk corruption, and equivalent content stored with different chunk segmentation. No tests in those suites were skipped.
+
+All 16 existing firmware integration tests, all 12 SD-copy tests and the password/slot/startup/receive-burst checks also passed during this change. No real accounts or SD cards were used.
+
+Windows Bluetooth device discovery, Windows pairing UI, the batch launcher and Bluetooth sync to a physical ESP32 have not run here. Firmware target cross-build remains blocked by PlatformIO registry access, as described below. The C++ core tests do not validate actual SD heap/timing or the Bluetooth radio. The PC executable is a development build without Authenticode signing. Transfers commit one site at a time; the batch is not a distributed transaction. Follow SYNC_README.md before using real stores.
+
 ## Android 0.4.1 authentication loading UI
 
 The Android app now displays an indeterminate spinner in its account dialog during login and registration, with an ESP32 explanation selected by the paired device's `BWW-ESP32` name prefix. It restores controls after failure and dismisses the dialog on success. It uses the existing authentication protocol and requires no firmware change. Android APK build and all 20 existing JVM tests passed with no failures/errors/skips; the existing instrumented test APK compiled. Lint passed with only the previously reviewed JavaScript warning, and the APK's v2 signature verified. No Android device is available here to verify the spinner rendering, keyboard behavior, or Bluetooth authentication in person. The downloadable APK is signed with the workspace's development key.

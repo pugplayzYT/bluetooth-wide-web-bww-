@@ -63,7 +63,7 @@ private:
     uint64_t clock_ = 0, checkpoint_ = 0;
     struct Chunk { size_t bytes; std::string hash; };
     struct Upload {
-        std::string id, domain, owner, session;
+        std::string id, domain, owner, session, expectedFingerprint;
         uint64_t touched = 0;
         size_t bytes = 0;
         bool htmlNonempty = false;
@@ -74,6 +74,8 @@ private:
     bool canPublish(const std::string& domain, const std::string& owner, JsonDocument& rpc);
     bool readSite(JsonDocument& rpc, JsonObjectConst record);
     bool validChunks(JsonObjectConst data);
+    std::string siteFingerprint(JsonDocument& rpc, JsonObjectConst record);
+    bool syncUnchanged(const std::string& domain, const std::string& expected, JsonDocument& rpc);
     bool validState(JsonDocument& state);
     bool commit();
     void pruneSites();

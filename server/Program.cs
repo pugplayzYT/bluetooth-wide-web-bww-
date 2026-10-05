@@ -10,7 +10,7 @@ var tcp = args.Contains("--tcp");
 var pathIndex = Array.IndexOf(args, "--data");
 if (args.Contains("--help"))
 {
-    Console.WriteLine("Bww.Server [--tcp] [--port 8877] [--data /path/store.json]\nDefault: Windows Bluetooth RFCOMM. TCP mode is loopback-only development transport.");
+    Console.WriteLine("Bww.Server [--tcp] [--port 8877] [--data /path/store.json]\nBww.Server --sync [--data /path/store.json]\nDefault: Windows Bluetooth RFCOMM. --sync compares/applies account websites to a selected Bluetooth ESP32. Stop this PC's host before sync. --sync-tcp PORT is loopback-only sync development transport.");
     return;
 }
 var dataPath = pathIndex >= 0 && pathIndex + 1 < args.Length ? args[pathIndex + 1] :
@@ -21,6 +21,12 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(dataPath))!);
 using var storeLock = new FileStream(dataPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
 var store = new Store(dataPath);
+if (args.Contains("--sync"))
+{
+    try { await SyncConsole.Run(store, dataPath, args, cancellation.Token); }
+    catch (Exception e) { Console.Error.WriteLine($"Sync failed: {e.Message}"); Environment.ExitCode = 1; }
+    return;
+}
 var slots = new SemaphoreSlim(16);
 Console.WriteLine($"Bluetooth-wide Web · protocol 1 · storage: {Path.GetFullPath(dataPath)}");
 

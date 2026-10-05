@@ -6,6 +6,8 @@ The project includes a Windows console server, a standalone ESP32 + SD card host
 
 ## Copy between your computer and ESP32 SD card
 
+For Bluetooth sync without removing the SD card, [download the Windows sync tool](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Windows-Sync-0.5.0.zip), update to [ESP32 firmware 0.5.0](esp32/README.md), and run **Sync-BWW.bat**. Select/pair the device, sign into the same username on both hosts, compare websites, choose directions, and approve the selected changes. See [the Bluetooth sync guide](SYNC_README.md).
+
 [Download BWW SD Copy](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-SD-Copy.zip), extract it, and run **Run-BWW-SD-Copy.bat** on Windows (Python 3.10+). Choose your computer's `store.json`, the SD card drive, and a copy direction. The tool previews changes, backs up the destination, and converts accounts/sites into the correct format. It never formats the card. Stop both hosts before copying. See [the short copy-tool guide](BWW_SD_COPY_README.md).
 
 ## Use the built app

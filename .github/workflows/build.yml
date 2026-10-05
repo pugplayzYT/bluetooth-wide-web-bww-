@@ -42,6 +42,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -53,7 +56,10 @@ jobs:
       - name: Build ESP32 firmware
         run: pio run -d esp32
       - name: Test portable firmware core
-        run: python3 scripts/test_firmware.py
+        run: |
+          dotnet restore server --locked-mode
+          dotnet build server -c Release --no-restore
+          python3 scripts/test_firmware.py
       - uses: actions/upload-artifact@v4
         with:
           name: Bww-ESP32-binaries

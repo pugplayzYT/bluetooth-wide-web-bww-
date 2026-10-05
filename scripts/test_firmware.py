@@ -30,3 +30,5 @@ with tempfile.TemporaryDirectory(prefix='bww-firmware-tests-') as temporary:
                    env=dict(os.environ, BWW_FIRMWARE_HARNESS=harness), check=True)
     subprocess.run(['python3', str(root / 'tests/test_sd_copy.py')],
                    env=dict(os.environ, BWW_FIRMWARE_HARNESS=harness), check=True)
+    subprocess.run(['python3', str(root / 'tests/test_bluetooth_sync.py')],
+                   env=dict(os.environ, BWW_FIRMWARE_HARNESS=harness), check=True)

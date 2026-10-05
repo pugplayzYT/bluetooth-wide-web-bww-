@@ -84,7 +84,14 @@ public sealed class Store
             var op = Field(r, "op", 32);
             switch (op)
             {
-                case "hello": return new { protocol = 1, name = "Bluetooth-wide Web", maxSiteBytes = 524288 };
+                case "hello": return new { protocol = 1, name = "Bluetooth-wide Web", maxSiteBytes = 524288, siteSync = "account-v1" };
+                case "sync_manifest":
+                {
+                    var owner = Identity(r);
+                    return state.Sites.Values.Where(s => s.Owner == owner).OrderBy(s => s.Domain).Select(s => new {
+                        domain = s.Domain, owner = s.Owner, fingerprint = SiteFingerprint.Of(s.Html, s.Css, s.Js)
+                    }).ToArray();
+                }
                 case "register":
                 case "login":
                 {
@@ -138,6 +145,7 @@ public sealed class Store
                     return new { domain = site.Domain, owner = site.Owner, html = site.Html, css = site.Css, js = site.Js, updated = site.Updated };
                 }
                 case "publish":
+                case "sync_publish":
                 {
                     var user = Identity(r);
                     var domain = Domain(Field(r, "domain", 128));
@@ -145,6 +153,8 @@ public sealed class Store
                     if (Encoding.UTF8.GetByteCount(html + css + js) > 524288) throw new ApiError("too_large", "Site exceeds 512 KiB");
                     if (string.IsNullOrWhiteSpace(html)) throw new ApiError("empty_site", "HTML is required");
                     if (state.Sites.TryGetValue(domain, out var old) && old.Owner != user) throw new ApiError("domain_taken", "This domain belongs to another account");
+                    if (op == "sync_publish" && Field(r, "expectedFingerprint", 64) != (old == null ? "missing" : SiteFingerprint.Of(old.Html, old.Css, old.Js)))
+                        throw new ApiError("sync_conflict", "Destination changed since comparison; compare again");
                     if (old == null && state.Sites.Values.Count(x => x.Owner == user) >= 50) throw new ApiError("capacity", "Each account may publish up to 50 sites");
                     state.Sites[domain] = new Site(domain, user, html, css, js, DateTimeOffset.UtcNow);
                     Save(); return new { domain, published = true };

@@ -32,6 +32,23 @@ class ProtocolTests(unittest.TestCase):
     def setUp(self):
         self.sock=socket.create_connection(('127.0.0.1',self.port),timeout=10)
         self.file=self.sock.makefile('rwb')
+    def test_06_sync_manifest_and_conditional_publish(self):
+        import hashlib
+        self.error('unauthorized','sync_manifest',token='invalid')
+        token=self.ok('register',username='sync_guard',password='correct horse battery')['token']
+        html='a'*8191+'💚'+'b'
+        self.ok('publish',token=token,domain='sync-guard',html=html,css='',js='')
+        metadata=self.ok('sync_manifest',token=token)[0]
+        first=b'a'*8191;last='💚b'.encode()
+        manifest='html:'+''.join(f'{len(c)}:{hashlib.sha256(c).hexdigest()},' for c in (first,last))+';css:;js:;'
+        self.assertEqual(metadata['fingerprint'],hashlib.sha256(manifest.encode()).hexdigest())
+        self.ok('publish',token=token,domain='sync-guard',html='changed',css='',js='')
+        self.error('sync_conflict','sync_publish',token=token,domain='sync-guard',expectedFingerprint=metadata['fingerprint'],html='stale copy',css='',js='')
+        self.error('sync_conflict','sync_publish',token=token,domain='sync-guard',expectedFingerprint='missing',html='stale copy',css='',js='')
+        self.assertEqual(self.ok('get',domain='sync-guard')['html'],'changed')
+        current=self.ok('sync_manifest',token=token)[0]['fingerprint']
+        self.ok('sync_publish',token=token,domain='sync-guard',expectedFingerprint=current,html='approved copy',css='',js='')
+        self.assertEqual(self.ok('get',domain='sync-guard')['html'],'approved copy')
     def tearDown(self): self.file.close(); self.sock.close()
     def call(self,op,**fields):
         self.file.write((json.dumps(dict(op=op,**fields))+'\n').encode()); self.file.flush()

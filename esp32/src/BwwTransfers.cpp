@@ -46,6 +46,54 @@ bool Core::canPublish(const std::string& domain, const std::string& owner, JsonD
     }
     return true;
 }
+std::string Core::siteFingerprint(JsonDocument& rpc, JsonObjectConst record) {
+    if (!readSite(rpc, record)) return "";
+    JsonObjectConst data = rpc["data"]; std::string manifest;
+    std::string pending; pending.reserve(CHUNK_BYTES + 4);
+    for (int a = 0; a < 3; ++a) {
+        const char* asset = assets[a]; manifest += std::string(asset) + ":";
+        auto emit = [&](size_t end) {
+            std::string carry = pending.substr(end); pending.resize(end);
+            auto hash = crypto_.sha256(pending);
+            if (hash.size() != 64) return false;
+            manifest += std::to_string(end) + ":" + hash + ","; pending = std::move(carry); return true;
+        };
+        auto feed = [&](const std::string& text) {
+            for (char byte : text) {
+                pending.push_back(byte);
+                if (pending.size() > CHUNK_BYTES) {
+                    size_t end = CHUNK_BYTES;
+                    while ((static_cast<uint8_t>(pending[end]) & 0xc0) == 0x80) --end;
+                    if (!emit(end)) return false;
+                }
+            }
+            return true;
+        };
+        bool ok = true;
+        if (data["transferMode"] == "chunk-v1") {
+            std::string id = data["transfer"].as<std::string>(); size_t index = 0;
+            for (JsonObjectConst c : data["chunks"][asset].as<JsonArrayConst>()) {
+                std::string text;
+                if (!storage_.readBytes(chunkPath(id, a, index++), CHUNK_BYTES, text) || text.size() != c["bytes"].as<size_t>() ||
+                    !constantTimeEqual(crypto_.sha256(text), c["hash"].as<std::string>()) || !validUtf8(text)) {
+                    failure(rpc, "storage_error", "Site chunk is damaged or unreadable"); return "";
+                }
+                if (!feed(text)) { ok = false; break; }
+            }
+        } else ok = feed(data[asset].as<std::string>());
+        if (ok && !pending.empty()) ok = emit(pending.size());
+        if (!ok) { failure(rpc, "crypto_error", "Could not compare site"); return ""; }
+        manifest += ";";
+    }
+    auto hash = crypto_.sha256(manifest); if (hash.size() != 64) { failure(rpc, "crypto_error", "Could not compare site"); return ""; } return hash;
+}
+bool Core::syncUnchanged(const std::string& domain, const std::string& expected, JsonDocument& rpc) {
+    auto record = site(domain);
+    std::string actual = record.isNull() ? "missing" : siteFingerprint(rpc, record);
+    if (actual.empty()) return false;
+    if (actual != expected) { failure(rpc, "sync_conflict", "Destination changed since comparison; compare again"); return false; }
+    return true;
+}
 void Core::transfer(JsonDocument& rpc, const std::string& op, const std::string& owner) {
     JsonObjectConst r = rpc.as<JsonObjectConst>();
     if (op == "get_chunk") {
@@ -71,18 +119,23 @@ void Core::transfer(JsonDocument& rpc, const std::string& op, const std::string&
     std::string token;
     if (!text(r, "token", 128, token, rpc)) return;
     auto session = crypto_.sha256(token);
-    if (op == "publish_begin") {
+    if (op == "publish_begin" || op == "sync_publish_begin") {
         std::string input, domain;
         if (!text(r, "domain", 128, input, rpc)) return;
         if (!canonicalDomain(input, domain)) { failure(rpc, "invalid_domain", "Invalid domain"); return; }
         if (!canPublish(domain, owner, rpc)) return;
+        std::string expected;
+        if (op == "sync_publish_begin") {
+            if (!text(r, "expectedFingerprint", 64, expected, rpc)) return;
+            if (!syncUnchanged(domain, expected, rpc)) return;
+        }
         // Starting again from the same session abandons its old incomplete upload.
         uploads_.erase(std::remove_if(uploads_.begin(), uploads_.end(), [&](const Upload& u) { return u.session == session; }), uploads_.end());
         pruneSites();
         if (uploads_.size() >= MAX_BT_CLIENTS) { failure(rpc, "capacity", "Three uploads are already in progress; retry after one finishes or expires"); return; }
         std::string id = crypto_.randomHex(16);
         if (id.size() != 32 || std::any_of(uploads_.begin(), uploads_.end(), [&](const Upload& u) { return u.id == id; })) { failure(rpc, "crypto_error", "Could not allocate upload identifier"); return; }
-        Upload u; u.id = id; u.domain = domain; u.owner = owner; u.session = session; u.touched = clock_; uploads_.push_back(std::move(u));
+        Upload u; u.id = id; u.domain = domain; u.owner = owner; u.session = session; u.expectedFingerprint = expected; u.touched = clock_; uploads_.push_back(std::move(u));
         auto result = success(rpc); result["transfer"] = id; result["chunkBytes"] = CHUNK_BYTES; return;
     }
     std::string id;
@@ -116,6 +169,7 @@ void Core::transfer(JsonDocument& rpc, const std::string& op, const std::string&
     }
     if (!u.htmlNonempty) { failure(rpc, "empty_site", "HTML is required"); return; }
     if (!canPublish(u.domain, owner, rpc)) return;
+    if (!u.expectedFingerprint.empty() && !syncUnchanged(u.domain, u.expectedFingerprint, rpc)) return;
     uint64_t revision = state_["generation"].as<uint64_t>() + 1;
     auto result = success(rpc); result["domain"] = u.domain; result["owner"] = owner; result["updated"] = nullptr; result["revision"] = revision;
     result["transferMode"] = "chunk-v1"; result["transfer"] = u.id;

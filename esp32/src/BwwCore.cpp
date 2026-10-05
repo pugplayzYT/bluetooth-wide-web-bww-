@@ -189,7 +189,7 @@ void Core::execute(JsonDocument& rpc) {
     if (op == "hello") {
         auto d = success(rpc); d["protocol"] = 1; d["name"] = "Bluetooth-wide Web ESP32"; d["maxSiteBytes"] = MAX_SITE_BYTES;
         d["maxBtClients"] = MAX_BT_CLIENTS; d["siteTransfer"] = "chunk-v1"; d["chunkBytes"] = CHUNK_BYTES;
-        d["firmwareVersion"] = FIRMWARE_VERSION; d["maxUsers"] = MAX_USERS; d["maxSites"] = MAX_SITES; d["sessionClock"] = "powered-time"; return;
+        d["firmwareVersion"] = FIRMWARE_VERSION; d["maxUsers"] = MAX_USERS; d["maxSites"] = MAX_SITES; d["sessionClock"] = "powered-time"; d["siteSync"] = "account-v1"; return;
     }
     if (op == "register" || op == "login") {
         std::string name, password;
@@ -220,10 +220,22 @@ void Core::execute(JsonDocument& rpc) {
         auto d = success(rpc); d["username"] = name; d["token"] = token; d["expires"] = nullptr; d["expiresAfterPoweredSeconds"] = SESSION_POWERED_SECONDS; return;
     }
     std::string name;
-    if (op == "me" || op == "logout" || op == "mine" || op == "publish" || op == "delete" || op == "publish_begin" || op == "publish_chunk" || op == "publish_commit" || op == "publish_cancel") {
+    if (op == "me" || op == "logout" || op == "mine" || op == "sync_manifest" || op == "sync_publish_begin" || op == "publish" || op == "delete" || op == "publish_begin" || op == "publish_chunk" || op == "publish_commit" || op == "publish_cancel") {
         name = identity(r); if (name.empty()) { failure(rpc, "unauthorized", "Sign in again; your session is missing or expired"); return; }
     }
-    if (op == "publish_begin" || op == "publish_chunk" || op == "publish_commit" || op == "publish_cancel" || op == "get_chunk") {
+    if (op == "sync_manifest") {
+        struct Summary { std::string domain, fingerprint; };
+        std::vector<Summary> summaries;
+        for (JsonObjectConst record : state_["sites"].as<JsonArrayConst>()) if (name == record["owner"].as<const char*>()) {
+            std::string domain = record["domain"].as<std::string>();
+            auto fingerprint = siteFingerprint(rpc, record); if (fingerprint.empty()) return;
+            summaries.push_back({domain, fingerprint});
+        }
+        auto data = successArray(rpc);
+        for (const auto& s : summaries) { auto entry = data.createNestedObject(); entry["domain"] = s.domain; entry["owner"] = name; entry["fingerprint"] = s.fingerprint; }
+        return;
+    }
+    if (op == "sync_publish_begin" || op == "publish_begin" || op == "publish_chunk" || op == "publish_commit" || op == "publish_cancel" || op == "get_chunk") {
         transfer(rpc, op, name); return;
     }
     if (op == "me") { success(rpc)["username"] = name; return; }
