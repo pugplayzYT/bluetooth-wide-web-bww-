@@ -1,5 +1,11 @@
 # Validation
 
+## Android 0.5.0 reconnect and persistent uploads
+
+The APK and instrumented test APK build passed. All 27 JVM tests passed with zero failures/errors/skips, including interrupted staging, lost commit replies without duplicate writes, destination/ownership conflicts, legacy-host replay restrictions and Unicode fingerprint compatibility. Lint passed with zero errors and only the existing reviewed JavaScript warning. The APK passed ZIP integrity checks and its v2 signature verified with the same development signing certificate as Android 0.4.2.
+
+Three additional instrumented tests cover real Android AtomicFile queue persistence without credentials, cancellation versus a stale worker, and per-device isolation/duplicate prevention. Together with the three existing WebView/full-screen tests, all six device tests compile; none ran because no Android device/emulator is available. Real radio dropouts, background-service restart, battery restrictions and notification/editor rendering remain unverified on hardware. The queue saves uploads before transmission, binds them to the paired address/account, and uses the existing 0.5.0 host conditional-publish protocol. No PC or firmware code changed for this update. See ANDROID_UPLOADS_README.md for older-host behavior and background limits.
+
 ## Android 0.4.2 full-screen exit gesture
 
 The persistent exit button is removed. Entry shows an automatically disappearing hint (“Swipe down from top to exit full screen”), and the activity observes top-edge downward swipes and top-edge double-clicks to exit both browser and HTML custom full-screen views. In-game taps, rapid clicks, double-taps, and scrolling within the content area are dispatched to the existing page without triggering an exit; Back and Escape remain exit paths. Updated instrumented tests verify that in-page double taps remain full screen without disrupting gameplay, top-edge swipe down restores the browser/page instance, top-edge double-tap restores the browser, Back works, and custom-view exit callbacks run. APK build and unit test compilation are verified via cloud CI.

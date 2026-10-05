@@ -39,6 +39,14 @@ public class MainActivity extends Activity {
     private boolean fullScreen, customWasFullScreen;
     private int topInset, bottomInset;
     private boolean busy;
+    private ProgressBar operationProgress, publishProgress;
+    private TextView publishMessage;
+    private AlertDialog publishingDialog;
+    private String publishJobId;
+    private Runnable restorePublishControls;
+    private final BroadcastReceiver uploadReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) { refreshUpload(); }
+    };
 
     interface Job { void run() throws Exception; }
     @Override public void onCreate(Bundle state) {
@@ -54,6 +62,9 @@ public class MainActivity extends Activity {
             }
         });
         prefs = getSharedPreferences("bww", MODE_PRIVATE);
+        connection.progress = message -> ui(() -> status.setText(message));
+        androidx.core.content.ContextCompat.registerReceiver(this, uploadReceiver,
+            new IntentFilter(PublishService.CHANGED), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED);
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(16), dp(10), dp(16), 0); root.setBackgroundColor(Color.rgb(244,247,245));
         chrome = new LinearLayout(this); chrome.setOrientation(LinearLayout.VERTICAL);
@@ -66,10 +77,13 @@ public class MainActivity extends Activity {
         TextView title = text("Bluetooth-wide Web", 24); title.setTypeface(null, android.graphics.Typeface.BOLD); chrome.addView(title);
         chrome.addView(text("A little web, right around you.", 14));
         status = text("Pair your computer in Bluetooth settings, then connect.", 13); chrome.addView(status);
+        operationProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        operationProgress.setIndeterminate(true); operationProgress.setVisibility(View.GONE); chrome.addView(operationProgress);
         LinearLayout toolbar = row();
         toolbar.addView(button("Connect", v -> chooseServer()));
         toolbar.addView(button("Sites", v -> listSites(false)));
         toolbar.addView(button("Account", v -> accountDialog())); chrome.addView(toolbar);
+        toolbar.addView(button("Uploads", v -> uploadsDialog()));
         account = text("Browsing as a guest", 13); chrome.addView(account);
         LinearLayout url = row(); address = new EditText(this); address.setSingleLine(true);
         address.setHint("bww://my-site.bww"); address.setInputType(17);
@@ -119,6 +133,8 @@ public class MainActivity extends Activity {
         setContentView(screen);
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
         web.loadDataWithBaseURL("https://welcome.bww/", "<html><meta name='viewport' content='width=device-width'><body style='font-family:sans-serif;padding:24px;color:#173e35'><h1>Welcome to your nearby web.</h1><p>1. Start BWW on your Windows computer.</p><p>2. Pair your phone with the computer.</p><p>3. Tap Connect and choose it.</p><p>Browse sites, or sign in to publish your own HTML, CSS, and JavaScript.</p></body></html>", "text/html", "UTF-8", null);
+        try { if (!PublishQueue.pending(this).isEmpty() && (Build.VERSION.SDK_INT < 31 || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED)) PublishService.start(this); }
+        catch (Exception e) { notice("Could not resume uploads: " + e.getMessage()); }
     }
     private int dp(int n) { return (int)(getResources().getDisplayMetrics().density * n); }
     private TextView text(String value, int size) { TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(Color.rgb(23,62,53)); t.setPadding(0, dp(4), 0, dp(4)); return t; }
@@ -131,7 +147,7 @@ public class MainActivity extends Activity {
     }
     private void task(String label, Job job, Runnable finished) {
         if (busy) { notice("Please wait for the current operation"); return; }
-        busy = true; status.setText(getString(R.string.progress, label));
+        busy = true; status.setText(getString(R.string.progress, label)); operationProgress.setVisibility(View.VISIBLE);
         worker.execute(() -> {
             try { job.run(); ui(() -> status.setText(connection.connected() ? "Connected · " + server : "Disconnected · tap Connect")); }
             catch (Exception e) {
@@ -139,7 +155,7 @@ public class MainActivity extends Activity {
                     token = ""; username = ""; prefs.edit().remove("token:" + server).remove("user:" + server).apply(); ui(this::updateAccount);
                 }
                 ui(() -> { status.setText(connection.connected() ? "Connected · " + server : "Disconnected · tap Connect"); notice(e.getMessage() == null ? "Operation failed" : e.getMessage()); });
-            } finally { ui(() -> { busy = false; finished.run(); }); }
+            } finally { ui(() -> { busy = false; operationProgress.setVisibility(View.GONE); finished.run(); }); }
         });
     }
     private JSONObject request(String op) throws JSONException { return new JSONObject().put("op", op); }
@@ -185,6 +201,7 @@ public class MainActivity extends Activity {
     }
     @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] grants) {
         super.onRequestPermissionsResult(code, permissions, grants);
+        if (code == 2) return; // Uploads also run when notification permission is declined.
         if (code == 1 && grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) chooseServer();
         else notice("Bluetooth permission is needed to connect");
     }
@@ -308,17 +325,36 @@ public class MainActivity extends Activity {
             });
         }));
         form.addView(text(getString(R.string.editor_limits, connection.maxSiteBytes() / 1024), 12));
+        LinearLayout panel = new LinearLayout(this); panel.setOrientation(LinearLayout.VERTICAL);
+        ProgressBar uploadProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); uploadProgress.setIndeterminate(true); uploadProgress.setVisibility(View.GONE);
+        TextView uploadMessage = text("", 14); uploadMessage.setVisibility(View.GONE); uploadMessage.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        panel.addView(uploadProgress); panel.addView(uploadMessage); panel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle(existing == null ? "Create Site" : "Edit " + existing.optString("domain"))
-            .setView(scroll).setPositiveButton("Publish", null).setNegativeButton("Close", null)
+            .setView(panel).setPositiveButton("Publish", null).setNegativeButton("Close", null)
             .setNeutralButton(existing == null ? "Discard draft" : "Delete site", null).create();
         dialog.setOnShowListener(d -> {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
                 try {
+                    if (busy) { notice("Please wait for the current operation"); return; }
                     String markup = html.getText().toString(), styles = css.getText().toString(), script = js.getText().toString();
                     long size = (long)markup.getBytes(StandardCharsets.UTF_8).length + styles.getBytes(StandardCharsets.UTF_8).length + script.getBytes(StandardCharsets.UTF_8).length;
                     if (size > connection.maxSiteBytes()) { notice(getString(R.string.site_too_large, connection.maxSiteBytes() / 1024)); return; }
-                    JSONObject payload = authenticated("publish").put("domain",domain.getText().toString()).put("html",markup).put("css",styles).put("js",script);
-                    task("Publishing", () -> { JSONObject result = connection.request(payload); prefs.edit().remove(key).apply(); ui(() -> { dialog.dismiss(); notice("Published · bww://" + result.optString("domain")); }); });
+                    String chosenDomain = SiteContent.domain(domain.getText().toString());
+                    JSONObject payload = new JSONObject().put("domain", chosenDomain).put("html",markup).put("css",styles).put("js",script);
+                    prefs.edit().putString(key, payload.toString()).apply();
+                    String baseline = existing == null ? "missing" : SiteFingerprint.of(existing.optString("html"), existing.optString("css"), existing.optString("js"));
+                    publishJobId = PublishQueue.enqueue(this, server, username, key, payload, baseline);
+                    publishingDialog = dialog; publishProgress = uploadProgress; publishMessage = uploadMessage;
+                    for (EditText field : new EditText[]{domain, html, css, js}) field.setEnabled(false);
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false); dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(false);
+                    restorePublishControls = () -> {
+                        domain.setEnabled(existing == null); html.setEnabled(true); css.setEnabled(true); js.setEnabled(true);
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true); dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(true);
+                    };
+                    connection.disconnect(); // Release this UI socket before the uploader connects.
+                    if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                        requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 2);
+                    PublishService.start(this); refreshUpload();
                 } catch (Exception e) { notice(e.getMessage()); }
             });
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> new AlertDialog.Builder(this).setTitle(existing == null ? "Discard this draft?" : "Delete this published site?")
@@ -326,7 +362,37 @@ public class MainActivity extends Activity {
                     if (existing == null) { prefs.edit().remove(key).apply(); dialog.dismiss(); }
                     else task("Deleting", () -> { connection.request(authenticated("delete").put("domain",existing.optString("domain"))); prefs.edit().remove(key).apply(); ui(dialog::dismiss); });
                 }).setNegativeButton("Cancel", null).show());
-        }); dialog.show();
+        }); dialog.show(); dialog.getWindow().setLayout(-1, (int)(getResources().getDisplayMetrics().heightPixels * 0.85));
+    }
+    private void refreshUpload() {
+        if (publishJobId == null) return;
+        try {
+            JSONObject job = PublishQueue.get(this, publishJobId); if (job == null) return;
+            String state = job.optString("state"), message = job.optString("message"); status.setText(message);
+            boolean active = "queued".equals(state); publishProgress.setVisibility(active ? View.VISIBLE : View.GONE);
+            publishMessage.setText(message); publishMessage.setVisibility(View.VISIBLE);
+            if (!active) {
+                restorePublishControls.run();
+                if ("done".equals(state)) { publishingDialog.dismiss(); notice(message); }
+                publishJobId = null;
+            }
+        } catch (Exception e) { notice("Could not read upload status: " + e.getMessage()); }
+    }
+    private void uploadsDialog() {
+        try {
+            List<JSONObject> jobs = PublishQueue.pending(this);
+            if (jobs.isEmpty()) { notice("No pending uploads"); return; }
+            String[] labels = new String[jobs.size()];
+            for (int i = 0; i < labels.length; ++i) { JSONObject job = jobs.get(i); labels[i] = job.getString("domain") + " · " + job.getString("address") + "\n" + job.optString("message"); }
+            new AlertDialog.Builder(this).setTitle("Pending uploads · tap to cancel").setItems(labels, (dialog, index) -> {
+                JSONObject job = jobs.get(index);
+                new AlertDialog.Builder(this).setTitle("Cancel this upload?").setMessage("Your saved draft will remain. Cancelling cannot undo a publish already accepted by the host.")
+                    .setPositiveButton("Cancel upload", (d,w) -> {
+                        try { startService(new Intent(this, PublishService.class).setAction(PublishService.CANCEL).putExtra("id",job.getString("id"))); }
+                        catch (Exception e) { notice(e.getMessage()); }
+                    }).setNegativeButton("Keep upload", null).show();
+            }).setNegativeButton("Close", null).show();
+        } catch (Exception e) { notice(e.getMessage()); }
     }
     private EditText codeField(LinearLayout form, String label, int lines) {
         form.addView(text(label, 14)); EditText field = new EditText(this); field.setTypeface(android.graphics.Typeface.MONOSPACE); field.setTextSize(13);
@@ -428,5 +494,5 @@ public class MainActivity extends Activity {
         return super.onKeyUp(keyCode, event);
     }
     @Override public void onWindowFocusChanged(boolean focused) { super.onWindowFocusChanged(focused); if (focused && fullScreen) applySystemBars(); }
-    @Override public void onDestroy() { hideCustomView(); if (fullScreenHint != null) fullScreenHint.cancel(); connection.close(); worker.shutdownNow(); web.destroy(); super.onDestroy(); }
+    @Override public void onDestroy() { unregisterReceiver(uploadReceiver); hideCustomView(); if (fullScreenHint != null) fullScreenHint.cancel(); connection.close(); worker.shutdownNow(); web.destroy(); super.onDestroy(); }
 }

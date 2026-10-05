@@ -12,7 +12,7 @@ For Bluetooth sync without removing the SD card, [download the Windows sync tool
 
 ## Use the built app
 
-[Download Android app 0.4.2](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Android-0.4.2.apk). This development APK introduces a non-intrusive top-edge swipe down and top-edge double-click exit gesture that prevents accidental exits during games and rapid tapping. It also includes the loading spinner for sign-in and registration. When the paired Bluetooth name starts with `BWW-ESP32`, it explains that secure password checking can take 10–20 seconds or longer on the board's small processor. Other hosts show a general waiting message. This app update works with the existing firmware; it does not require reflashing the ESP32. Buttons are disabled during authentication and restored on failure so a request cannot accidentally be submitted twice.
+[Download Android app 0.5.0](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Android-0.5.0.apk). This update adds Bluetooth reconnect attempts, saved publish uploads that continue through a background service, and loading/status feedback for publishing and opening the editor. See [reconnect and upload behavior](ANDROID_UPLOADS_README.md), including cancellation, conflict review and Android background limits. Existing PC/ESP32 hosts at 0.5.0 support safe automatic publish retries without another host update; older hosts can require review after an interrupted write. The app retains the authentication spinner and the temporary full-screen exit hint, top-edge swipe and top-edge double-tap exit, so in-game taps keep working. Install over your existing app to preserve its data.
 
 Build outputs in this workspace:
 

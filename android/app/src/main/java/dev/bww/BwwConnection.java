@@ -12,6 +12,10 @@ import java.util.concurrent.*;
 final class BwwConnection implements Closeable {
     static final UUID SERVICE = BluetoothServices.BWW;
     private volatile boolean validated;
+    private volatile boolean safePublish;
+    private BluetoothDevice lastDevice;
+    java.util.function.Consumer<String> progress = value -> {};
+    boolean safePublish() { return safePublish; }
     private volatile int chunkBytes;
     private volatile int maxSiteBytes = 524288;
     int maxSiteBytes() { return maxSiteBytes; }
@@ -21,7 +25,7 @@ final class BwwConnection implements Closeable {
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
 
     private static void closeSocket(BluetoothSocket socket) { try { socket.close(); } catch (IOException ignored) { } }
-    void connect(BluetoothDevice device) throws Exception {
+    synchronized void connect(BluetoothDevice device) throws Exception {
         disconnect();
         try {
             Exception last = null;
@@ -43,7 +47,8 @@ final class BwwConnection implements Closeable {
                         chunkBytes = hello.getInt("chunkBytes");
                         if (chunkBytes < 4 || chunkBytes > SiteChunks.MAX_CHUNK_BYTES) throw new IOException("Unsupported server chunk size");
                     }
-                    validated = true; return;
+                    safePublish = "account-v1".equals(hello.optString("siteSync"));
+                    lastDevice = device; validated = true; return;
                 } catch (IOException | org.json.JSONException | IllegalArgumentException e) { last = e; disconnect(); }
             }
             throw new IOException("Could not connect to a BWW server. Check the computer/ESP32 is running and paired.", last);
@@ -53,6 +58,9 @@ final class BwwConnection implements Closeable {
         }
     }
     synchronized JSONObject envelope(JSONObject request) throws Exception {
+        return withReconnect(request, () -> envelopeOnce(request));
+    }
+    private JSONObject envelopeOnce(JSONObject request) throws Exception {
         if (socket == null || !socket.isConnected()) throw new IOException("Connect to a server first");
         if (!validated && !"hello".equals(request.optString("op"))) throw new IOException("BWW handshake is required before account or site requests");
         BluetoothSocket current = socket;
@@ -77,9 +85,30 @@ final class BwwConnection implements Closeable {
         catch (IOException e) { disconnect(); throw e; }
         finally { timeout.cancel(false); }
     }
-    private JSONObject direct(JSONObject request) throws Exception { return envelope(request).getJSONObject("data"); }
+    private JSONObject direct(JSONObject request) throws Exception { return envelopeOnce(request).getJSONObject("data"); }
     synchronized JSONObject request(JSONObject request) throws Exception {
-        if (chunkBytes > 0 && "publish".equals(request.optString("op"))) return publishChunks(request);
+        return withReconnect(request, () -> requestOnce(request));
+    }
+    private interface Attempt { JSONObject run() throws Exception; }
+    private JSONObject withReconnect(JSONObject request, Attempt action) throws Exception {
+        String op = request.optString("op");
+        boolean read = java.util.Arrays.asList("get", "list", "mine", "me", "available", "get_chunk").contains(op);
+        Exception last = null;
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            try { return action.run(); }
+            catch (ApiException e) { throw e; }
+            catch (IOException e) {
+                last = e;
+                if (!read || lastDevice == null || attempt == 2) throw e;
+                progress.accept("Connection lost. Reconnecting…");
+                Thread.sleep(2000L * (attempt + 1));
+                try { connect(lastDevice); } catch (IOException e2) { last = e2; }
+            }
+        }
+        throw last;
+    }
+    private JSONObject requestOnce(JSONObject request) throws Exception {
+        if (chunkBytes > 0 && ("publish".equals(request.optString("op")) || "sync_publish".equals(request.optString("op")))) return publishChunks(request);
         JSONObject result = direct(request);
         if ("get".equals(request.optString("op")) && "chunk-v1".equals(result.optString("transferMode"))) {
             JSONObject chunks = result.getJSONObject("chunks"); long total = 0; int count = 0;
@@ -103,7 +132,9 @@ final class BwwConnection implements Closeable {
         String token = request.getString("token"); long total = 0;
         for (String asset : new String[]{"html", "css", "js"}) total += request.getString(asset).getBytes(StandardCharsets.UTF_8).length;
         if (total > maxSiteBytes) throw new IOException("Site exceeds server size limit");
-        JSONObject begin = direct(new JSONObject().put("op","publish_begin").put("token",token).put("domain",request.getString("domain")));
+        JSONObject startRequest = new JSONObject().put("op", "sync_publish".equals(request.optString("op")) ? "sync_publish_begin" : "publish_begin").put("token",token).put("domain",request.getString("domain"));
+        if ("sync_publish".equals(request.optString("op"))) startRequest.put("expectedFingerprint", request.getString("expectedFingerprint"));
+        JSONObject begin = direct(startRequest);
         String transfer = begin.getString("transfer");
         try {
             for (String asset : new String[]{"html", "css", "js"}) {
@@ -122,7 +153,7 @@ final class BwwConnection implements Closeable {
     }
     void disconnect() {
         BluetoothSocket s = socket;
-        socket = null; validated = false; chunkBytes = 0; maxSiteBytes = 524288;
+        socket = null; validated = false; safePublish = false; chunkBytes = 0; maxSiteBytes = 524288;
         if (s != null) try { s.close(); } catch (IOException ignored) { }
     }
     boolean connected() { BluetoothSocket s = socket; return validated && s != null && s.isConnected(); }
