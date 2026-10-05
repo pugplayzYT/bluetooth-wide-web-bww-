@@ -20,6 +20,7 @@ public sealed class ApiError(string code, string message) : Exception(message)
 }
 public sealed class Store
 {
+    public const int MaxUserSites = 50;
     private State state;
     private readonly string path;
     private readonly object gate = new();
@@ -84,7 +85,7 @@ public sealed class Store
             var op = Field(r, "op", 32);
             switch (op)
             {
-                case "hello": return new { protocol = 1, name = "Bluetooth-wide Web", maxSiteBytes = 524288, siteSync = "account-v1" };
+                case "hello": return new { protocol = 1, name = "Bluetooth-wide Web", maxSiteBytes = 524288, maxUserSites = MaxUserSites, siteQuota = "account", siteSync = "account-v1" };
                 case "sync_manifest":
                 {
                     var owner = Identity(r);
@@ -155,7 +156,7 @@ public sealed class Store
                     if (state.Sites.TryGetValue(domain, out var old) && old.Owner != user) throw new ApiError("domain_taken", "This domain belongs to another account");
                     if (op == "sync_publish" && Field(r, "expectedFingerprint", 64) != (old == null ? "missing" : SiteFingerprint.Of(old.Html, old.Css, old.Js)))
                         throw new ApiError("sync_conflict", "Destination changed since comparison; compare again");
-                    if (old == null && state.Sites.Values.Count(x => x.Owner == user) >= 50) throw new ApiError("capacity", "Each account may publish up to 50 sites");
+                    if (old == null && state.Sites.Values.Count(x => x.Owner == user) >= MaxUserSites) throw new ApiError("capacity", "Each account may publish up to 50 sites");
                     state.Sites[domain] = new Site(domain, user, html, css, js, DateTimeOffset.UtcNow);
                     Save(); return new { domain, published = true };
                 }

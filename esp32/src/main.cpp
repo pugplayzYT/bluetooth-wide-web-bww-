@@ -188,9 +188,9 @@ void setup() {
     if (rpc.capacity() != RPC_CAPACITY || !SD.begin(SD_CS, SPI, SD_FREQUENCY) || SD.cardType() == CARD_NONE || !core.begin()) {
         Serial.println("SD/storage initialization failed. Check wiring, FAT32, power, and /bww backups. No data is automatically formatted or reset."); return;
     }
-    Serial.printf("SD storage: usable=%llu bytes, free=%llu bytes, upload reserve=%llu bytes; website count uses SD space\n",
+    Serial.printf("SD storage: usable=%llu bytes, free=%llu bytes, upload reserve=%llu bytes; total website count uses SD space, max per account=%u\n",
         static_cast<unsigned long long>(disk.totalBytes()), static_cast<unsigned long long>(disk.freeBytes()),
-        static_cast<unsigned long long>(SD_RESERVE_BYTES));
+        static_cast<unsigned long long>(SD_RESERVE_BYTES), static_cast<unsigned>(MAX_USER_SITES));
     if (!bluetooth.begin("BWW-ESP32")) { Serial.println("Bluetooth startup stopped. See the preceding step/error; restart after correcting it."); return; }
     uint8_t key[32]; esp_fill_random(key, sizeof(key)); mbedtls_aes_init(&spoolCipher);
     int cipherResult = mbedtls_aes_setkey_enc(&spoolCipher, key, 256); memset(key, 0, sizeof(key));

@@ -108,6 +108,48 @@ class CopyTests(unittest.TestCase):
         self.copy(); self.assertEqual(len(tool.load_sd(self.sd).sites),41)
         self.assertEqual(tool.load_sd(self.sd).sites['site-40.bww']['html'],'updated')
 
+    def test_fifty_site_quota_round_trips_and_blocks_growth_on_both_hosts(self):
+        fifty={f'quota-{i}.bww':site(f'quota-{i}.bww') for i in range(50)}
+        self.write_pc(store(sites=fifty)); self.copy()
+        exported=self.root/'exported.json'; self.copy('to-computer',exported)
+        result=json.loads(exported.read_text()); self.assertEqual(len(result['Sites']),50)
+        self.assertEqual(result['Users'],json.loads(self.pc.read_text())['Users'])
+        self.assertEqual(result['Sites']['quota-49.bww']['Html'],fifty['quota-49.bww']['Html'])
+        extra=dict(fifty); extra['extra.bww']=site('extra.bww'); self.write_pc(store(sites=extra))
+        before=self.card_bytes()
+        with self.assertRaisesRegex(tool.CopyError,'50 sites'): tool.plan_copy(self.pc,self.sd)
+        self.assertEqual(self.card_bytes(),before)
+        # Simulate a valid pre-quota 0.6.0 card; the new tool must read it but
+        # must not grow a fresh PC account beyond fifty.
+        with patch.object(tool,'ACCOUNT_SITE_LIMIT',1000): self.copy()
+        over=self.card_bytes(); fresh=self.root/'fresh.json'
+        with self.assertRaisesRegex(tool.CopyError,'50 sites'): tool.plan_copy(fresh,self.sd,'to-computer')
+        self.assertFalse(fresh.exists()); self.assertEqual(self.card_bytes(),over)
+        extra['extra.bww']=site('extra.bww',html='edited existing over-quota site')
+        self.write_pc(store(sites=extra)); self.copy()
+        self.assertEqual(tool.load_sd(self.sd).sites['extra.bww']['html'],'edited existing over-quota site')
+        # Existing PC collections over the quota can also be updated without
+        # silently deleting or rejecting their existing websites.
+        stale=dict(extra); stale['extra.bww']=site('extra.bww',html='stale PC contents')
+        self.write_pc(store(sites=stale)); self.copy('to-computer',self.pc)
+        restored=json.loads(self.pc.read_text()); self.assertEqual(len(restored['Sites']),51)
+        self.assertEqual(restored['Sites']['extra.bww']['Html'],'edited existing over-quota site')
+
+    def test_desktop_collection_above_64mib_can_be_read_with_fifty_valid_sites(self):
+        html='💚'*(524288//4)
+        # Escaped Unicode makes this valid fifty-site JSON store exceed 64 MiB,
+        # even though every website remains within its 512 KiB asset limit.
+        with self.pc.open('w',encoding='utf-8') as out:
+            out.write('{"Users":'+json.dumps({'alice':account()})+',"Sessions":{},"Sites":{')
+            for i in range(50):
+                if i: out.write(',')
+                domain=f'unicode-{i}.bww'; value=site(domain,html=html); value['Css']=value['Js']=''
+                out.write(json.dumps(domain)+':'+json.dumps(value))
+            out.write('}}')
+        self.assertGreater(self.pc.stat().st_size,64*1024*1024)
+        loaded=tool.load_desktop(self.pc)
+        self.assertEqual(len(loaded.sites),50); self.assertEqual(loaded.sites['unicode-49.bww']['html'],html)
+
     def test_preview_changes_backup_inside_card_and_symlinks_are_rejected(self):
         plan=tool.plan_copy(self.pc,self.sd); self.write_pc(store(sites={'changed.bww':site('changed.bww')}))
         with self.assertRaisesRegex(tool.CopyError,'changed since preview'): tool.apply_copy(plan,self.backups)

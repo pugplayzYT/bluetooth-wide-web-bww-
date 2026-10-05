@@ -249,7 +249,7 @@ void Core::execute(JsonDocument& rpc) {
     if (op == "hello") {
         auto d = success(rpc); d["protocol"] = 1; d["name"] = "Bluetooth-wide Web ESP32"; d["maxSiteBytes"] = MAX_SITE_BYTES;
         d["maxBtClients"] = MAX_BT_CLIENTS; d["siteTransfer"] = "chunk-v1"; d["chunkBytes"] = CHUNK_BYTES;
-        d["firmwareVersion"] = FIRMWARE_VERSION; d["maxUsers"] = MAX_USERS; d["siteQuota"] = "sd-space"; d["storageBytes"] = storage_.totalBytes(); d["freeStorageBytes"] = storage_.freeBytes(); d["storageReserveBytes"] = SD_RESERVE_BYTES; d["siteListing"] = "paged-v1"; d["sessionClock"] = "powered-time"; d["siteSync"] = "account-v1"; return;
+        d["firmwareVersion"] = FIRMWARE_VERSION; d["maxUsers"] = MAX_USERS; d["siteQuota"] = "account-and-sd-space"; d["maxUserSites"] = MAX_USER_SITES; d["storageBytes"] = storage_.totalBytes(); d["freeStorageBytes"] = storage_.freeBytes(); d["storageReserveBytes"] = SD_RESERVE_BYTES; d["siteListing"] = "paged-v1"; d["sessionClock"] = "powered-time"; d["siteSync"] = "account-v1"; return;
     }
     if (op == "register" || op == "login") {
         std::string name, password;
@@ -347,6 +347,7 @@ void Core::execute(JsonDocument& rpc) {
     if (!field(r, "html", INLINE_SITE_BYTES, html, rpc) || !field(r, "css", INLINE_SITE_BYTES, css, rpc) || !field(r, "js", INLINE_SITE_BYTES, js, rpc)) return;
     if (html.size() + css.size() + js.size() > INLINE_SITE_BYTES) { failure(rpc, "too_large", "Use chunk-v1 transfers for sites larger than 16 KiB; total site limit is 512 KiB"); return; }
     if (html.empty() || std::all_of(html.begin(), html.end(), [](unsigned char c) { return std::isspace(c); })) { failure(rpc, "empty_site", "HTML is required"); return; }
+    if (!canPublish(domain, name, rpc)) return;
     if (!spaceFor(html.size() + css.size() + js.size() + 16384)) { failure(rpc, "storage_full", "SD card is full; delete websites or free space on the card"); return; }
     uint64_t revision = state_["generation"].as<uint64_t>() + 1;
     std::string path = "/bww/sites/" + domain + "." + std::to_string(revision) + ".json";

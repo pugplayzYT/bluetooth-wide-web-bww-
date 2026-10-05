@@ -2,7 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 namespace bww {
-constexpr const char* FIRMWARE_VERSION = "0.6.0";
+constexpr const char* FIRMWARE_VERSION = "0.6.1";
 constexpr int SD_CS = 5, SD_SCK = 18, SD_MOSI = 23, SD_MISO = 19;
 constexpr uint32_t SD_FREQUENCY = 4000000;
 constexpr size_t MAX_BT_CLIENTS = 3;
@@ -15,6 +15,7 @@ constexpr size_t RPC_CAPACITY = INLINE_SITE_BYTES + 8192;
 constexpr uint32_t UPLOAD_IDLE_SECONDS = 300;
 constexpr size_t STATE_CAPACITY = 16 * 1024;
 constexpr size_t MAX_USERS = 12, MAX_SESSIONS = 24;
+constexpr size_t MAX_USER_SITES = 50;
 constexpr size_t CATALOG_PAGE_SITES = 8, CATALOG_CAPACITY = 2048, LIST_PAGE_SITES = 32;
 constexpr uint64_t SD_RESERVE_BYTES = 128 * 1024;
 constexpr uint32_t PASSWORD_ITERATIONS = 210000;

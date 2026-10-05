@@ -41,7 +41,7 @@ For original ESP32 with Bluetooth Classic and at least 4 MB flash.
 This build uses the BWW huge_app partition layout and GPIO5/18/23/19 SD wiring.
 
 UPGRADE an existing BWW 0.4.x/0.5.x/0.6.x ESP32:
-Back up the SD card /bww folder first. Firmware 0.6.0 migrates the website index
+Back up the SD card /bww folder first. Firmware 0.6.0+ migrates the website index
 without formatting. Do not downgrade to 0.5.2 or earlier after migration.
 Install Android 0.6.0 to list all sites when there are more than 32.
 

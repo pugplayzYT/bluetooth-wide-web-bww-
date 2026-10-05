@@ -125,4 +125,21 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(json.loads(self.file.readline())['data']['protocol'],1)
         self.assertTrue(json.loads(self.file.readline())['ok'])
 
+    def test_07_fifty_sites_per_account_without_a_global_fifty_site_limit(self):
+        self.assertEqual(self.ok('hello')['maxUserSites'],50)
+        alice=self.ok('register',username='quota_pc_a',password='correct horse battery')['token']
+        bob=self.ok('register',username='quota_pc_b',password='correct horse battery')['token']
+        for token,prefix in ((alice,'quota-pc-a'),(bob,'quota-pc-b')):
+            for i in range(50): self.ok('publish',token=token,domain=f'{prefix}-{i}',html='site '+str(i),css='',js='')
+            self.error('capacity','publish',token=token,domain=prefix+'-extra',html='extra',css='',js='')
+            self.error('capacity','sync_publish',token=token,domain=prefix+'-extra',expectedFingerprint='missing',html='extra',css='',js='')
+            self.ok('publish',token=token,domain=prefix+'-0',html='edited',css='',js='')
+        self.assertEqual(len(self.ok('mine',token=alice)),50)
+        self.assertEqual(len(self.ok('mine',token=bob)),50)
+        self.tearDown(); self.stop(); self.start(); self.setUp()
+        self.assertEqual(self.ok('get',domain='quota-pc-a-0')['html'],'edited')
+        self.assertEqual(len(self.ok('mine',token=bob)),50)
+        self.ok('delete',token=alice,domain='quota-pc-a-1')
+        self.ok('publish',token=alice,domain='quota-pc-a-extra',html='replacement',css='',js='')
+
 if __name__=='__main__': unittest.main(verbosity=2)

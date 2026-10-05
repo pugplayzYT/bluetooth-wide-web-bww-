@@ -1,5 +1,16 @@
 # Validation
 
+## Matching account quotas 0.6.1
+
+PC and ESP32 advertise and enforce **50 websites per account**, without a separate total-site count cap. PC's existing quota is retained; ESP32 checks new-domain inline/chunk/sync publication and rechecks chunk commits. Existing collections above 50 remain readable/editable/deletable; additions require fewer than 50 current sites. The paged SD format, storage reserve, 512 KiB per-site size, and account/session/client bounds remain unchanged. Android 0.6.0 remains compatible.
+
+Validation passed **31 firmware integration, 15 SD-copy, 8 PC-to-firmware sync and 7 PC wire-protocol tests (61 total), none skipped**. New tests cover two staged uploads competing for the last account slot, inline/chunk/sync quota rejection, editing at the quota, deletion freeing a slot, another account publishing beyond 50 total sites, persistence over restart, and preserving/editing a legitimate over-quota catalog from 0.6.0. PC wire tests publish 100 total sites across two accounts and verify independent 50-site quotas, sync rejection, editing, deletion and restart.
+
+Conversion tests copy fifty sites PC → paged SD → PC, preserve credentials/content, reject additions over fifty in both directions before writing, and permit updates to existing over-quota collections without trimming them. The copy tool no longer has an unrelated 64 MiB ceiling on an entire desktop store; a valid fifty-site escaped-Unicode JSON collection above 64 MiB loads successfully while each site's 512 KiB limit remains enforced. Conversion still loads collections into computer RAM, so actual resources and transfer time remain practical constraints. Existing checksum, backup, conflict, session-preservation, preview/change-detection and legacy-format checks remain included.
+
+The pinned original ESP32 target build, PC Release build and Windows x64 self-contained publish succeeded. Firmware/source/Windows/copy packages were verified with matching images/ELF, ZIP contents and SHA-256 sums. This update was tested in the cloud/native protocol harness, not on physical Bluetooth/SD/Windows hardware. No Android code or APK update was needed; automatic reconnection remains unchanged.
+
+
 ## Firmware / clients 0.6.0 SD-space catalog
 
 The firmware now stores website records in eight-entry, 2 KiB SD catalog pages instead of the RAM account/session snapshot. Three slots and read-back SHA-256 proofs preserve active/fallback pages while staging edits. Interrupted proof writes are ignored; uncommitted generations are discarded at startup and on failed root commits so later checkpoints cannot accidentally activate them. Disposable domain lookup files fall back to verified page scanning. Upload admission detects actual usable/free SD space and leaves 128 KiB for metadata/recovery; deletion can use this reserve. The 512 KiB individual website and 12-account/24-session/three-client limits remain.

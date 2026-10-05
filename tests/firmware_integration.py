@@ -276,7 +276,7 @@ class FirmwareTests(unittest.TestCase):
     def test_sd_space_and_reserve_block_uploads_without_losing_existing_sites(self):
         token=self.register(); self.publish(token)
         hello=self.ok('hello'); self.assertEqual(hello['storageBytes'],32*1024**3)
-        self.assertEqual(hello['siteQuota'],'sd-space'); self.assertNotIn('maxSites',hello)
+        self.assertEqual(hello['siteQuota'],'account-and-sd-space'); self.assertEqual(hello['maxUserSites'],50); self.assertNotIn('maxSites',hello)
         self.control(_test='sd_space',bytes=128*1024+100)
         self.error('storage_full','publish_begin',token=token,domain='new')
         self.error('storage_full','publish',token=token,domain='garden',html='replacement',css='',js='')
@@ -359,5 +359,48 @@ class FirmwareTests(unittest.TestCase):
         self.start(); self.ok("hello"); self.assertFalse(proof.exists())
         self.control(_test='advance',seconds=301)
         self.assertEqual(self.ok('get',domain='garden')['html'],'<h1>Hello</h1>')
+
+    def test_50_site_quota_covers_inline_chunks_sync_and_concurrent_commits(self):
+        token=self.register()
+        for i in range(49): self.publish(token,domain=f'quota-{i}')
+        second=self.ok('login',username='alice',password='correct horse battery')['token']
+        a=self.begin_upload(token,'last-slot'); b=self.begin_upload(second,'overflow')
+        self.chunk(token,a,'html',0,'last available'); self.chunk(second,b,'html',0,'too many')
+        self.ok('publish_commit',token=token,transfer=a)
+        self.error('capacity','publish_commit',token=second,transfer=b)
+        self.ok('publish_cancel',token=second,transfer=b)
+        self.error('capacity','publish',token=token,domain='overflow',html='extra',css='',js='')
+        self.error('capacity','publish_begin',token=token,domain='overflow')
+        self.error('capacity','sync_publish_begin',token=token,domain='overflow',expectedFingerprint='missing')
+        self.publish(token,domain='quota-0',html='edited at quota')
+        self.chunked_site(token,domain='quota-1',html='chunk edit at quota')
+        bob=self.register('bob'); self.publish(bob,domain='other-account')
+        self.ok('delete',token=token,domain='quota-2'); self.publish(token,domain='replacement')
+        self.stop(); self.start()
+        self.assertEqual(self.ok('get',domain='other-account')['owner'],'bob')
+        self.assertEqual(self.ok('get',domain='quota-0')['html'],'edited at quota')
+        self.error('capacity','publish_begin',token=token,domain='still-full')
+
+    def test_existing_over_quota_catalog_is_preserved_and_can_be_edited(self):
+        import hashlib
+        def encoded(value): return json.dumps(value,separators=(',',':'),ensure_ascii=False).encode()
+        token=self.register()
+        for i in range(50): self.publish(token,domain=f'legacy-{i}')
+        self.stop()
+        roots=[json.loads(p.read_text()) for p in (self.root/'bww').glob('state-*.json')]
+        state=max(roots,key=lambda s:s['generation']); number=state['catalogPages']-1
+        pages=[(p,json.loads(p.read_text())) for p in (self.root/'bww/catalog').glob(f'{number}-*.json')]
+        path,page=max(((p,d) for p,d in pages if d['generation']<=state['generation']),key=lambda item:item[1]['generation'])
+        metadata=dict(ok=True,data=dict(domain='legacy-extra.bww',owner='alice',revision=state['generation'],updated=None,html='existing extra',css='',js=''))
+        metadata['digest']=hashlib.sha256(encoded(metadata['data'])).hexdigest()
+        (self.root/f'bww/sites/legacy-extra.bww.{state["generation"]}.json').write_bytes(encoded(metadata))
+        page['sites'].append(dict(domain='legacy-extra.bww',owner='alice',revision=state['generation']))
+        path.write_bytes(encoded(page)); path.with_name(path.name+'.ok').write_text(hashlib.sha256(encoded(page)).hexdigest())
+        self.start(); self.assertEqual(self.ok('get',domain='legacy-extra')['html'],'existing extra')
+        self.publish(token,domain='legacy-extra',html='edited existing extra')
+        self.error('capacity','publish_begin',token=token,domain='new')
+        self.ok('delete',token=token,domain='legacy-extra')
+        self.error('capacity','publish_begin',token=token,domain='new')
+        self.ok('delete',token=token,domain='legacy-0'); self.publish(token,domain='new')
 
 if __name__ == '__main__': unittest.main(verbosity=2)

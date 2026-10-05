@@ -41,6 +41,13 @@ bool Core::canPublish(const std::string& domain, const std::string& owner, JsonD
     auto record = site(domain);
     if (!record.isNull() && owner != record["owner"].as<const char*>()) { failure(rpc, "domain_taken", "Only the owner may change this site"); return false; }
     if (catalogError_) { failure(rpc, "storage_error", "Could not read website catalog"); return false; }
+    if (record.isNull()) {
+        size_t own = 0;
+        if (!visitSites(state_, [&](JsonObjectConst item) {
+            if (owner == item["owner"].as<const char*>()) ++own;
+        })) { failure(rpc, "storage_error", "Could not read website catalog"); return false; }
+        if (own >= MAX_USER_SITES) { failure(rpc, "capacity", "Each account may publish up to 50 sites"); return false; }
+    }
     if (!spaceFor(16384)) { failure(rpc, "storage_full", "SD card is full; delete websites or free space on the card"); return false; }
     return true;
 }

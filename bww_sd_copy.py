@@ -19,6 +19,7 @@ import uuid
 
 ASSETS = ('html', 'css', 'js')
 SITE_LIMIT = 512 * 1024
+ACCOUNT_SITE_LIMIT = 50
 CHUNK_BYTES = 8192
 USER_NAME = re.compile(r'[a-z0-9_]{3,32}\Z')
 DOMAIN = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.bww\Z')
@@ -104,10 +105,10 @@ class Bundle:
     notes: list = field(default_factory=list)
 
     def read(self, path, maximum):
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > maximum:
+        if path.is_symlink() or not path.is_file() or (maximum is not None and path.stat().st_size > maximum):
             raise CopyError('Missing, unsafe, or oversized data file: ' + str(path))
         data = path.read_bytes()
-        if len(data) > maximum:
+        if maximum is not None and len(data) > maximum:
             raise CopyError('Data file grew while reading; stop the host and retry')
         self.files[path] = sha(data)
         return data
@@ -150,7 +151,9 @@ def load_desktop(path, allow_empty=False):
         bundle.files[path] = None
         bundle.state = {'Users': {}, 'Sessions': {}, 'Sites': {}}
         return bundle
-    state = bundle.read_json(path, 64 * 1024 * 1024)
+    # A desktop store contains every account's sites. Keep per-site validation,
+    # but do not impose an unrelated 64 MiB ceiling on the whole collection.
+    state = bundle.read_json(path, None)
     if not isinstance(state, dict) or not all(isinstance(state.get(k), dict) for k in ('Users', 'Sessions', 'Sites')):
         raise CopyError('This is not a BWW desktop store.json file')
     for name, user in state['Users'].items():
@@ -370,8 +373,13 @@ def plan_copy(computer, sd, direction='to-sd'):
         counts[site['owner']] = counts.get(site['owner'], 0) + 1
     if direction == 'to-sd' and len(dest.users) + len(added_users) > 12:
         raise CopyError('ESP32 account limit exceeded: 12 accounts')
-    if direction == 'to-computer' and (len(dest.users) + len(added_users) > 10000 or any(c > 50 for c in counts.values())):
-        raise CopyError('Desktop account/site limits exceeded')
+    previous_counts = {}
+    for site in dest.sites.values():
+        previous_counts[site['owner']] = previous_counts.get(site['owner'], 0) + 1
+    if any(count > ACCOUNT_SITE_LIMIT and count > previous_counts.get(owner, 0) for owner, count in counts.items()):
+        raise CopyError('Each account may publish up to 50 sites on either host; remove sites from the source or destination before copying')
+    if direction == 'to-computer' and len(dest.users) + len(added_users) > 10000:
+        raise CopyError('Desktop account limit exceeded')
     return Plan(direction, computer, sd, source, dest, added_users, added_sites, updated, same)
 
 

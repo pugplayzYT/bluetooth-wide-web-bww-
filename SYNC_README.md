@@ -1,6 +1,6 @@
 # Bluetooth website sync
 
-[Download the Windows host and sync tool](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Windows-Sync-0.6.0.zip) and [ESP32 firmware project 0.5.0](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-ESP32-PlatformIO-0.5.0.zip).
+[Download the Windows host and sync tool](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Windows-Sync-0.6.1.zip) and [ESP32 firmware project 0.5.0](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-ESP32-PlatformIO-0.5.0.zip).
 
 Sync compares websites for the account you sign into on your computer and ESP32. It lists PC-only sites, device-only sites, and sites with different contents. For each difference, choose PC → device, device → PC, or skip. It then shows the selected changes and asks you to type `APPLY` before transferring anything.
 
@@ -31,4 +31,4 @@ Passwords, account records and sessions are not synchronized. Both hosts enforce
 
 After publishing the Windows host into `artifacts/windows-x64`, run `python3 scripts/package_sync.py` to recreate the verified download ZIPs and checksums.
 
-Firmware 0.6.0 stores website indexes in SD catalog pages and removes the eight-per-account/24-per-device site quotas. Use Windows sync 0.6.0 to compare all pages when a host has more than 32 sites. Existing 512 KiB individual site limits and PC account quotas still apply.
+Firmware 0.6.0 stores website indexes in SD catalog pages and removes the eight-per-account/24-per-device site quotas. Use Windows sync 0.6.0 to compare all pages when a host has more than 32 sites. Both hosts now allow 50 websites per account in 0.6.1. Individual sites remain limited to 512 KiB. The SD-copy tool enforces the same quota when converting between formats.
