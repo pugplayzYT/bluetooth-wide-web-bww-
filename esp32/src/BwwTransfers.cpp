@@ -187,11 +187,14 @@ void Core::transfer(JsonDocument& rpc, const std::string& op, const std::string&
         storage_.remove(path); failure(rpc, "storage_error", "Site metadata verification failed"); return;
     }
     // Check every staged chunk before publishing; reads are bounded to one chunk.
-    std::string content;
-    for (int a = 0; a < 3; ++a) for (size_t i = 0; i < u.chunks[a].size(); ++i) {
-        const auto& c = u.chunks[a][i];
-        if (!storage_.readBytes(chunkPath(u.id, a, i), CHUNK_BYTES, content) || content.size() != c.bytes || !constantTimeEqual(c.hash, crypto_.sha256(content))) { storage_.remove(path); failure(rpc, "storage_error", "Upload chunk was lost or corrupted; publish again"); return; }
-    }
+    {
+        std::string content;
+        for (int a = 0; a < 3; ++a) for (size_t i = 0; i < u.chunks[a].size(); ++i) {
+            const auto& c = u.chunks[a][i];
+            if (!storage_.readBytes(chunkPath(u.id, a, i), CHUNK_BYTES, content) || content.size() != c.bytes || !constantTimeEqual(c.hash, crypto_.sha256(content))) { storage_.remove(path); failure(rpc, "storage_error", "Upload chunk was lost or corrupted; publish again"); return; }
+        }
+    } // Release the chunk buffer before allocating the state commit verifier.
+    rpc.clear(); // Verified site metadata is no longer needed by this request.
     auto record = site(u.domain);
     if (record.isNull()) record = state_["sites"].as<JsonArray>().createNestedObject();
     record["domain"] = u.domain; record["owner"] = owner; record["revision"] = revision;

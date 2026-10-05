@@ -117,6 +117,25 @@ class FirmwareTests(unittest.TestCase):
         self.stop(); self.start()
         self.error('upload_missing','publish_commit',token=token,transfer=transfer)
         self.assertFalse(list((self.root/'bww/sites').glob('*.bin')))
+    def test_chunk_verification_buffer_is_freed_before_state_commit(self):
+        token = self.register()
+        self.control(_test='guard_commit_chunk')
+        for generation in range(3):
+            text = 'x' * 8192 + str(generation)
+            self.chunked_site(token, domain='commit-memory', html=text)
+            self.assertEqual(self.load_chunks('commit-memory')['html'], text)
+        self.stop(); self.start()
+        self.assertEqual(self.load_chunks('commit-memory')['html'], 'x' * 8192 + '2')
+
+    def test_state_commit_allows_the_reported_fragmented_heap(self):
+        token = self.register()
+        # Use the production file-open policy at the exact reported heap values.
+        self.control(_test='fragmented_state_reads')
+        self.chunked_site(token, domain='fragmented', html='x' * 8192)
+        self.assertEqual(self.load_chunks('fragmented')['html'], 'x' * 8192)
+        self.stop(); self.start()
+        self.assertEqual(self.load_chunks('fragmented')['html'], 'x' * 8192)
+
     def test_cleanup_uses_one_temporary_json_buffer_and_preserves_generations(self):
         token = self.register()
         self.control(_test='memory_budget', bytes=65536)

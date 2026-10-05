@@ -9,16 +9,17 @@
 #include "BwwBluetooth.h"
 #include "RequestFrame.h"
 #include "PasswordHmac.h"
+#include "FileMemory.h"
 using namespace bww;
 void pumpNetwork();
 void cooperateStorage();
 // Newlib may abort instead of returning nullptr when a file mutex cannot be
-// allocated. Leave headroom for stdio, the mutex and an 8 KiB chunk buffer.
-bool fileMemoryReady() {
+// allocated. Chunk allocation headroom is requested only by chunk reads.
+bool fileMemoryReady(size_t newBufferBytes = 0) {
     const auto caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     size_t free = heap_caps_get_free_size(caps), largest = heap_caps_get_largest_free_block(caps);
-    if (free >= 16384 && largest >= 8192) return true;
-    Serial.printf("SD file operation deferred: low heap, free=%u largest=%u\n", static_cast<unsigned>(free), static_cast<unsigned>(largest));
+    if (fileMemoryAvailable(free, largest, newBufferBytes)) return true;
+    Serial.printf("SD file operation deferred: low heap, free=%u largest=%u new_buffer=%u\n", static_cast<unsigned>(free), static_cast<unsigned>(largest), static_cast<unsigned>(newBufferBytes));
     return false;
 }
 class SdStorage : public Storage {
@@ -50,7 +51,13 @@ public:
         if (!fileMemoryReady()) return false;
         File file = SD.open(path.c_str(), FILE_READ);
         if (!file || file.isDirectory() || file.size() > maxBytes) return false;
-        bytes.resize(file.size()); size_t read = file.read(reinterpret_cast<uint8_t*>(bytes.data()), bytes.size()); file.close(); return read == bytes.size();
+        size_t size = file.size();
+        if (size > bytes.capacity()) {
+            if (!fileMemoryReady(size + 1)) { file.close(); return false; }
+            // Allocate exactly the required buffer rather than doubling an old capacity.
+            std::string replacement(size, '\0'); bytes.swap(replacement);
+        } else bytes.resize(size);
+        size_t read = file.read(reinterpret_cast<uint8_t*>(bytes.data()), bytes.size()); file.close(); return read == bytes.size();
     }
     bool remove(const std::string& path) override { return !exists(path) || SD.remove(path.c_str()); }
     bool visitFiles(const std::string& directory, const std::function<void(const std::string&)>& visitor) override {

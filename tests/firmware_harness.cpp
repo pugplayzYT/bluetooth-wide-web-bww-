@@ -1,6 +1,8 @@
 #include "BwwCore.h"
 #include "RequestFrame.h"
 #include "ClientSlots.h"
+#include "FileMemory.h"
+#include <new>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -14,6 +16,25 @@ static struct { void* pointer; size_t bytes; } jsonAllocations[128] = {};
 static size_t jsonLive = 0, jsonPeak = 0, jsonLimit = SIZE_MAX, jsonRejected = 0;
 extern "C" void* __real_malloc(size_t);
 extern "C" void __real_free(void*);
+// Interpose real C++ string/buffer allocations to detect a retained chunk at commit.
+static struct { void* pointer; size_t bytes; } cppAllocations[4096] = {};
+void* operator new(size_t bytes) {
+    void* pointer = __real_malloc(bytes); if (!pointer) throw std::bad_alloc();
+    for (auto& entry : cppAllocations) if (!entry.pointer) { entry = {pointer, bytes}; return pointer; }
+    std::abort();
+}
+void operator delete(void* pointer) noexcept {
+    for (auto& entry : cppAllocations) if (pointer && entry.pointer == pointer) { entry = {}; break; }
+    __real_free(pointer);
+}
+void operator delete(void* pointer, size_t) noexcept { ::operator delete(pointer); }
+void* operator new[](size_t bytes) { return ::operator new(bytes); }
+void operator delete[](void* pointer) noexcept { ::operator delete(pointer); }
+void operator delete[](void* pointer, size_t) noexcept { ::operator delete(pointer); }
+bool liveChunk(const void* pointer) {
+    for (const auto& entry : cppAllocations) if (entry.pointer == pointer && entry.bytes >= CHUNK_BYTES) return true;
+    return false;
+}
 extern "C" void* __wrap_malloc(size_t bytes) {
     bool tracked = bytes == STATE_CAPACITY || bytes == RPC_CAPACITY;
     if (tracked && bytes > jsonLimit - jsonLive) { ++jsonRejected; return nullptr; }
@@ -34,14 +55,24 @@ class Disk : public Storage {
     std::filesystem::path root_;
 public:
     bool failNextState = false;
+#ifdef BWW_TRACK_JSON_ALLOCATIONS
+    bool guardCommitChunk = false, fragmentedStateReads = false;
+    const void* lastChunkBuffer = nullptr;
+#endif
     explicit Disk(const char* path) : root_(path) {}
     std::filesystem::path path(const std::string& name) { return root_ / name.substr(1); }
     bool exists(const std::string& name) override { return std::filesystem::exists(path(name)); }
     bool mkdir(const std::string& name) override { std::error_code e; std::filesystem::create_directories(path(name), e); return !e; }
     bool readJson(const std::string& name, JsonDocument& doc) override {
+#ifdef BWW_TRACK_JSON_ALLOCATIONS
+        if (fragmentedStateReads && name.find("/state-") != std::string::npos && !fileMemoryAvailable(21512, 8180)) return false;
+#endif
         doc.clear(); std::ifstream file(path(name)); return file && !deserializeJson(doc, file, DeserializationOption::NestingLimit(16));
     }
     bool writeJson(const std::string& name, const JsonDocument& doc) override {
+#ifdef BWW_TRACK_JSON_ALLOCATIONS
+        if (guardCommitChunk && name.find("/state-") != std::string::npos && liveChunk(lastChunkBuffer)) return false;
+#endif
         std::ofstream file(path(name), std::ios::trunc | std::ios::binary);
         if (!file) return false;
         if (failNextState && name.find("/state-") != std::string::npos) { failNextState = false; file << "{incomplete"; return false; }
@@ -55,7 +86,11 @@ public:
         std::ifstream file(path(name), std::ios::binary | std::ios::ate);
         if (!file || file.tellg() < 0 || static_cast<size_t>(file.tellg()) > maxBytes) return false;
         bytes.resize(static_cast<size_t>(file.tellg())); file.seekg(0);
-        file.read(bytes.data(), bytes.size()); return file.good();
+        file.read(bytes.data(), bytes.size());
+#ifdef BWW_TRACK_JSON_ALLOCATIONS
+        lastChunkBuffer = bytes.data();
+#endif
+        return file.good();
     }
     bool remove(const std::string& name) override { std::error_code e; std::filesystem::remove(path(name), e); return !e; }
     bool visitFiles(const std::string& directory, const std::function<void(const std::string&)>& visitor) override {
@@ -95,6 +130,12 @@ public:
 };
 int main(int argc, char** argv) {
     NativeCrypto crypto;
+    if (argc == 2 && std::string(argv[1]) == "--file-memory-check") {
+        if (!fileMemoryAvailable(21512, 8180) || fileMemoryAvailable(21512, 8180, 8193) ||
+            fileMemoryAvailable(4096, 4096) || fileMemoryAvailable(40000, 3000) ||
+            !fileMemoryAvailable(32768, 20000, 8193) || fileMemoryAvailable(SIZE_MAX, SIZE_MAX, SIZE_MAX)) return 1;
+        std::cout << "Reported heap permits JSON/file I/O; chunk allocation and unsafe heap states stay guarded\n"; return 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "--slots-check") {
         ClientSlots slots;
         if (slots.add(10) != 0 || slots.add(20) != 1 || slots.add(30) != 2 || slots.add(40) != -1 || slots.find(20) != 1) return 1;
@@ -121,6 +162,8 @@ int main(int argc, char** argv) {
         else if (rpc["_test"] == "fail_next_state") { disk.failNextState = true; rpc.clear(); rpc["ok"] = true; rpc.createNestedObject("data"); }
         else if (rpc["_test"] == "advance") { uint32_t seconds = rpc["seconds"]; bool ok = core.advance(seconds); rpc.clear(); rpc["ok"] = ok; rpc.createNestedObject("data"); }
 #ifdef BWW_TRACK_JSON_ALLOCATIONS
+        else if (rpc["_test"] == "guard_commit_chunk") { disk.guardCommitChunk = true; rpc.clear(); rpc["ok"] = true; rpc.createNestedObject("data"); }
+        else if (rpc["_test"] == "fragmented_state_reads") { disk.fragmentedStateReads = true; rpc.clear(); rpc["ok"] = true; rpc.createNestedObject("data"); }
         else if (rpc["_test"] == "memory_budget") { jsonLimit = rpc["bytes"]; jsonPeak = jsonLive; jsonRejected = 0; rpc.clear(); rpc["ok"] = true; rpc.createNestedObject("data"); }
         else if (rpc["_test"] == "memory_stats") { rpc.clear(); rpc["ok"] = true; auto data = rpc.createNestedObject("data"); data["live"] = jsonLive; data["peak"] = jsonPeak; data["rejected"] = jsonRejected; }
 #endif

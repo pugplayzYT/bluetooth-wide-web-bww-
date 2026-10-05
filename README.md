@@ -6,7 +6,7 @@ The project includes a Windows console server, a standalone ESP32 + SD card host
 
 ## ESP32 upload crash patch
 
-[Download ESP32 firmware 0.5.1 for PlatformIO](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-ESP32-PlatformIO-0.5.1.zip), extract it, open its `esp32` folder in VS Code, and click **Upload**. This patch reduces cleanup RAM use and checks memory headroom before opening SD files, addressing the observed upload-start allocation failure. Existing SD accounts/sites and the three-client/512 KiB defaults remain compatible. [Prebuilt binaries and matching crash-decoder ELF](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-ESP32-Binaries-0.5.1.zip) are also available. See [the firmware guide](esp32/README.md).
+[Download ESP32 firmware 0.5.2 for PlatformIO](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-ESP32-PlatformIO-0.5.2.zip), extract it, open its `esp32` folder in VS Code, and click **Upload**. This patch reduces cleanup RAM use, releases the verification chunk before committing, and corrects the overly strict JSON-file memory guard from 0.5.1. Existing SD accounts/sites and the three-client/512 KiB defaults remain compatible. [Prebuilt binaries and matching crash-decoder ELF](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-ESP32-Binaries-0.5.2.zip) are also available. See [the firmware guide](esp32/README.md).
 
 ## Copy between your computer and ESP32 SD card
 

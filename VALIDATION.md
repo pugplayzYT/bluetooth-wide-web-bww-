@@ -1,5 +1,13 @@
 # Validation
 
+## Firmware 0.5.2 commit-memory fix
+
+The pinned ESP32 target build passed; static RAM is 40,096 bytes and flash fits the existing huge-app partition. All 21 firmware integration tests, 12 SD-copy tests and seven PC↔firmware sync tests passed, none skipped. Existing startup/receive-burst/client-slot/password/cooperation checks passed as well.
+
+Two new regressions specifically exercise this failure. The allocation-instrumented native harness tracks real C++ buffer allocation lifetimes and refuses state writes while the last full-sized verification chunk is retained. The original 0.5.1 transfer code fails with `Could not commit site to SD`; 0.5.2 publishes repeatedly, verifies the contents and preserves them across restart. A second test runs the production file-open policy for state reads at the user's exact `free=21512 largest=8180` sample. The 0.5.1 policy fails that test with the same commit error, and the corrected policy passes. Headroom checks also verify that a fresh 8 KiB chunk allocation is refused at that sample, adequate memory is accepted, and inadequate/overflow-sized requests stay blocked.
+
+The verifier buffer is destroyed before state commit. JSON documents and outbound chunks already allocated by callers now reserve file-I/O headroom only; chunk reads reserve any new chunk buffer separately and avoid geometric capacity growth. The new binary image's checksum/hash and matching ELF are verified during packaging. These are target-build and native simulation results, not measurements on a physical ESP32. Upload 0.5.2 to verify the previously reported failure is resolved on the user's board. Android 0.5.0 and SD account/site formats remain compatible.
+
 ## Firmware 0.5.1 cleanup allocation patch
 
 The pinned PlatformIO ESP32 target build passed using espressif32 6.9.0, Arduino ESP32 2.0.17, ArduinoJson 6.21.5 and the Xtensa 8.4.0 toolchain. Flash and static RAM fit the existing original-ESP32/huge-app layout. This cloud now has the target toolchain; historical build restrictions described below do not apply to this patch's build.
