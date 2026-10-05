@@ -29,6 +29,94 @@ class FirmwareTests(unittest.TestCase):
     def control(self, **fields):
         self.process.stdin.write(json.dumps(fields)+'\n'); self.process.stdin.flush()
         self.assertTrue(json.loads(self.process.stdout.readline())['ok'])
+    def begin_upload(self, token, domain='large'):
+        return self.ok('publish_begin',token=token,domain=domain)['transfer']
+    def chunk(self, token, transfer, asset, index, content):
+        if isinstance(content,str): content=content.encode()
+        return self.ok('publish_chunk',token=token,transfer=transfer,asset=asset,index=index,data=content.hex())
+    def chunked_site(self, token, domain='large', html='hello', css='', js=''):
+        transfer=self.begin_upload(token,domain)
+        for asset, content in [('html',html),('css',css),('js',js)]:
+            # Split by characters so every request is independently valid UTF-8.
+            pending=bytearray(); index=0
+            for char in content:
+                encoded=char.encode()
+                if len(pending)+len(encoded)>8192:
+                    self.chunk(token,transfer,asset,index,pending); index+=1; pending.clear()
+                pending.extend(encoded)
+            if pending: self.chunk(token,transfer,asset,index,pending)
+        self.ok('publish_commit',token=token,transfer=transfer)
+        return transfer
+    def load_chunks(self, domain):
+        metadata=self.ok('get',domain=domain); output={}
+        for asset, chunks in metadata['chunks'].items():
+            content=bytearray()
+            for i, item in enumerate(chunks):
+                raw=bytes.fromhex(self.ok('get_chunk',domain=domain,revision=metadata['revision'],asset=asset,index=i)['data'])
+                self.assertEqual(len(raw),item['bytes']); content.extend(raw)
+            output[asset]=content.decode()
+        return output
+    def test_full_512kib_unicode_site_survives_reboot_using_bounded_chunks(self):
+        token=self.register(); html='abcd💚'*(524288//8)
+        self.chunked_site(token,html=html)
+        self.assertEqual(self.load_chunks('large')['html'],html)
+        self.assertTrue(all(p.stat().st_size <= 8192 for p in (self.root/'bww/sites').glob('*.bin')))
+        self.assertTrue(all(p.stat().st_size < 24576 for p in (self.root/'bww/sites').glob('*.json')))
+        self.stop(); self.start()
+        self.assertEqual(self.load_chunks('large')['html'],html)
+        transfer=self.begin_upload(token,'too-large')
+        for i in range(64): self.chunk(token,transfer,'html',i,'a'*8192)
+        self.error('too_large','publish_chunk',token=token,transfer=transfer,asset='css',index=0,data='61')
+        self.assertTrue(self.ok('available',domain='too-large')['available'])
+        self.ok('publish_cancel',token=token,transfer=transfer)
+    def test_three_interleaved_uploads_are_isolated_and_fourth_is_rejected(self):
+        token=self.register(); tokens=[token]+[self.ok('login',username='alice',password='correct horse battery')['token'] for _ in range(3)]
+        transfers=[self.begin_upload(tokens[i],f'parallel-{i}') for i in range(3)]
+        self.error('capacity','publish_begin',token=tokens[3],domain='fourth')
+        for i in range(3): self.chunk(tokens[i],transfers[i],'html',0,f'phone-{i}')
+        self.error('upload_missing','publish_chunk',token=tokens[1],transfer=transfers[0],asset='html',index=1,data='61')
+        self.error('invalid_request','publish_chunk',token=tokens[0],transfer=transfers[0],asset='html',index=0,data='61')
+        for i in [2,0,1]: self.ok('publish_commit',token=tokens[i],transfer=transfers[i])
+        for i in range(3): self.assertEqual(self.load_chunks(f'parallel-{i}')['html'],f'phone-{i}')
+        self.begin_upload(tokens[3],'fourth')
+    def test_chunk_upload_collision_checks_owner_at_commit(self):
+        alice=self.register(); bob=self.register('bob')
+        a=self.begin_upload(alice,'collision'); b=self.begin_upload(bob,'collision')
+        self.chunk(alice,a,'html',0,'Alice'); self.chunk(bob,b,'html',0,'Bob')
+        self.ok('publish_commit',token=alice,transfer=a)
+        self.error('domain_taken','publish_commit',token=bob,transfer=b)
+        self.assertEqual(self.load_chunks('collision')['html'],'Alice')
+    def test_chunk_failure_and_previous_snapshot_recovery_keep_old_files(self):
+        token=self.register(); self.chunked_site(token,html='original')
+        transfer=self.begin_upload(token); self.chunk(token,transfer,'html',0,'replacement')
+        self.control(_test='fail_next_state'); self.error('storage_error','publish_commit',token=token,transfer=transfer)
+        self.assertEqual(self.load_chunks('large')['html'],'original')
+        self.ok('publish_commit',token=token,transfer=transfer)
+        self.assertEqual(self.load_chunks('large')['html'],'replacement')
+        self.stop(); slots=list((self.root/'bww').glob('state-*.json'))
+        newest=max(slots,key=lambda p:json.loads(p.read_text())['generation']); newest.write_text('{truncated')
+        self.start(); self.assertEqual(self.load_chunks('large')['html'],'original')
+    def test_upload_expiry_cancel_and_corrupted_chunk_fail_safely(self):
+        token=self.register(); transfer=self.begin_upload(token)
+        self.chunk(token,transfer,'html',0,'unfinished')
+        self.control(_test='advance',seconds=301)
+        self.error('upload_missing','publish_commit',token=token,transfer=transfer)
+        self.assertFalse(list((self.root/'bww/sites').glob('*.bin')))
+        self.chunked_site(token,html='published')
+        metadata=self.ok('get',domain='large')
+        chunk=next((self.root/'bww/sites').glob('*.bin')); chunk.write_text('corrupted')
+        self.error('storage_error','get_chunk',domain='large',revision=metadata['revision'],asset='html',index=0)
+        self.chunked_site(token,html='repaired'); self.assertEqual(self.load_chunks('large')['html'],'repaired')
+        self.error('site_changed','get_chunk',domain='large',revision=metadata['revision'],asset='html',index=0)
+    def test_invalid_chunks_empty_html_and_abandoned_upload_after_reboot(self):
+        token=self.register(); transfer=self.begin_upload(token)
+        for data in ['zz','f','c0af','',('61'*8193)]:
+            self.error('too_large' if len(data)>16384 else 'invalid_request','publish_chunk',token=token,transfer=transfer,asset='html',index=0,data=data)
+        self.chunk(token,transfer,'html',0,'   ')
+        self.error('empty_site','publish_commit',token=token,transfer=transfer)
+        self.stop(); self.start()
+        self.error('upload_missing','publish_commit',token=token,transfer=transfer)
+        self.assertFalse(list((self.root/'bww/sites').glob('*.bin')))
     def test_wire_framing_rejects_trailing_json_and_recovers_on_next_line(self):
         for line in ['{bad json}', '{"op":"hello"} {"op":"list"}', '[]', '{"op":"hello"}garbage']:
             self.process.stdin.write(line+'\n'); self.process.stdin.flush()
@@ -38,7 +126,8 @@ class FirmwareTests(unittest.TestCase):
         self.assertTrue(json.loads(self.process.stdout.readline())['ok'])
         self.assertTrue(json.loads(self.process.stdout.readline())['ok'])
     def test_accounts_ownership_and_all_operations(self):
-        self.assertEqual(self.ok('hello')['maxSiteBytes'],16384)
+        self.assertEqual(self.ok('hello')['maxSiteBytes'],524288)
+        self.assertEqual(self.ok('hello')['maxBtClients'],3)
         self.error('weak_password','register',username='short',password='tiny')
         alice = self.register(); bob = self.register('bob')
         self.error('username_taken','register',username='ALICE',password='correct horse battery')

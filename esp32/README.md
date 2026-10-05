@@ -34,7 +34,7 @@ Specify your serial port if detection is ambiguous, for example `pio run -d esp3
 
 1. Boot with the SD card connected. The serial monitor must report `READY Bluetooth`.
 2. In Android Bluetooth settings, pair with **BWW-ESP32**. Compare the phone's code with the serial monitor's six-digit code. Approve on the phone, then type `Y` in the monitor or briefly press the board's BOOT button. Type `N` to reject; pairing expires after 60 seconds. Legacy fixed-PIN pairing is rejected.
-3. Install Android app **version 0.3.0 or newer**, tap Connect, and select the paired board. The app supports the ESP32's standard Serial Port Profile UUID as well as the Windows server's custom UUID, and checks BWW protocol 1 before sending account credentials.
+3. Install Android app **version 0.4.0 or newer**, tap Connect, and select the paired board. The app supports the ESP32's standard Serial Port Profile UUID as well as the Windows server's custom UUID, and checks BWW protocol 1 before sending account credentials.
 4. Register an account, create a site, and publish. Public browsing does not require login. Domains and accounts belong to this board/card; they are separate from your Windows host.
 
 Website full screen and `localStorage` work in the Android WebView just as with the desktop host. Browser storage stays on each phone, isolated by website and paired Bluetooth host; it is not written to the SD card or synchronized between phones.
@@ -43,8 +43,8 @@ Website full screen and `localStorage` work in the Android WebView just as with 
 
 | Setting | Firmware default |
 | --- | --- |
-| Simultaneous Bluetooth clients | 1 |
-| HTML + CSS + JavaScript combined | 16 KiB UTF-8 per site |
+| Simultaneous Bluetooth clients | 3 |
+| HTML + CSS + JavaScript combined | 512 KiB UTF-8 per site |
 | Accounts | 12 |
 | Sites | 24 total, 8 per account |
 | Active sessions | 24 total, 4 per account |
@@ -52,17 +52,23 @@ Website full screen and `localStorage` work in the Android WebView just as with 
 | Session duration | 30 days of accumulated powered runtime |
 | SD SPI frequency | 4 MHz |
 
+The firmware has three independent authenticated SPP connection slots with separate receive queues and request files, and handles completed requests in turn. The controller is explicitly configured for three Classic ACL links (the bundled Bluedroid host supports four). Long password hashing and reply waits continue receiving the other clients' requests. A fourth connection is disconnected; pair phones one at a time.
+
+Sites transfer as up to 8 KiB UTF-8 chunks saved directly to SD, so a 512 KiB site never requires a 512 KiB ESP32 heap allocation. The JSON request/reply buffer stays at 24 KiB; each chunk is checked with SHA-256, and publish commits only after its metadata/chunks are verified. Up to three uploads can be staged; each is bound to the authenticated session and expires after five powered minutes without activity. Incomplete uploads are removed after reboot. HTML/CSS/JS share the 512 KiB total. Older version 0.3 clients can access legacy inline sites up to 16 KiB, but cannot browse newly chunked sites. Upgrade to Android 0.4 before using this firmware.
+
+Incoming request spools are AES-CTR encrypted with a fresh RAM-only key each boot and per-request nonces, then deleted after processing. Passwords and bearer tokens are not written in plaintext to the card. This protects residual request files; it does not encrypt published sites or the account database.
+
 The Android editor displays the connected host's size limit. ESP32 hashing is slower than desktop hashing; login/register may take several seconds. The Android client allows up to 120 seconds for authentication and 60 seconds for other operations.
 
 There is no RTC or Internet clock. Sessions survive reboot, but time while powered off does not count toward expiration. The powered clock is saved on mutations and every five minutes; abrupt power loss can lose up to five minutes. The API reports `expires: null` and `expiresAfterPoweredSeconds`, and site `updated` is null with an increasing `revision`, rather than claiming a calendar timestamp.
 
-The firmware reserves `/bww` on the SD card. Two checksummed state snapshots track users, hashed tokens, and site ownership. Site versions are separately checksummed JSON files under `/bww/sites`. Publishing writes a new site generation before committing the inactive snapshot and checking it back. A truncated latest snapshot can recover the previous valid snapshot; recent changes can be lost during that recovery. If both snapshots are invalid, boot fails without wiping the card. FAT/SD hardware still cannot guarantee survival of every power loss. Back up the entire `/bww` directory with the board powered off, and never remove the card during use. The firmware prunes obsolete site generations inside its reserved directory.
+The firmware reserves `/bww` on the SD card. Two checksummed state snapshots track users, hashed tokens, and site ownership. Site metadata versions are separately checksummed JSON files, with individually checksummed binary UTF-8 chunks under `/bww/sites`. Publishing writes a new site generation before committing the inactive snapshot and checking it back. A truncated latest snapshot can recover the previous valid snapshot; recent changes can be lost during that recovery. If both snapshots are invalid, boot fails without wiping the card. FAT/SD hardware still cannot guarantee survival of every power loss. Back up the entire `/bww` directory with the board powered off, and never remove the card during use. The firmware prunes obsolete site generations inside its reserved directory.
 
-Passwords and raw session tokens are not stored on SD or printed to Serial. People with physical access to the card can read public content and password hashes; keep backups private. Forgotten-password recovery is not implemented. Link authentication and encryption are required by the SPP listener, but there is no independent application certificate.
+Persisted credentials contain salted password hashes and session-token digests; Serial never prints passwords or bearer tokens. Temporary request files contain only ciphertext as described above. People with physical access to the card can read public content and password hashes; keep backups private. Forgotten-password recovery is not implemented. Link authentication and encryption are required by the SPP listener, but there is no independent application certificate.
 
 ## Developer guide and validation
 
-Edit `include/BwwConfig.h` to change SD pins and limits. Pin changes also require rewiring; larger JSON limits consume ESP32 heap and must be tested on hardware. `src/BwwCore.cpp` implements the same operations documented in [../PROTOCOL.md](../PROTOCOL.md). `src/main.cpp` adapts SD storage and mbedTLS crypto; `src/BwwBluetooth.cpp` provides secure Classic SPP, numeric pairing confirmation, bounded receiving, and congestion-aware replies. The desktop and SD storage formats are intentionally separate; copying desktop `store.json` to the card is not an import.
+Edit `include/BwwConfig.h` to change SD pins and limits (`MAX_BT_CLIENTS = 3`, `MAX_SITE_BYTES = 512 * 1024`). Pin changes also require rewiring; larger JSON limits consume ESP32 heap and must be tested on hardware. `src/BwwCore.cpp` and `src/BwwTransfers.cpp` implement the same operations documented in [../PROTOCOL.md](../PROTOCOL.md). `src/main.cpp` adapts SD storage and mbedTLS crypto; `src/BwwBluetooth.cpp` provides secure Classic SPP, numeric pairing confirmation, bounded receiving, and congestion-aware replies. The desktop and SD storage formats are intentionally separate; copying desktop `store.json` to the card is not an import.
 
 After installing PlatformIO dependencies, Linux developers can test the actual portable C++ core using g++ and OpenSSL development headers:
 
@@ -72,6 +78,6 @@ python3 scripts/test_firmware.py
 
 Run that command from the repository root. It tests account operations/ownership, quotas, persisted sessions/sites, powered-time expiration, interrupted writes, corrupt snapshots/site content, framing, and PBKDF2 compatibility with OpenSSL. This uses temporary directories and does not touch your card. It does not exercise the ESP-IDF Bluetooth stack or SD electrical behavior.
 
-Before relying on hardware, build and flash it, verify the reported flash/RAM usage, then pair a phone, register, publish near the 16 KiB limit, reconnect and reboot, and verify the saved site/session. Test rejected pairing, a second phone while connected, missing/invalid SD cards, and scores retained in the Android app. Check Serial for mount/pairing errors without logging account secrets.
+Before relying on hardware, build and flash it, verify the reported flash/RAM usage, then pair a phone, register, publish near the 512 KiB limit, reconnect and reboot, and verify the saved site/session. Test rejected pairing, three phones browsing/publishing at once, a fourth rejected while all slots are occupied, missing/invalid SD cards, and scores retained in the Android app. Check Serial for mount/pairing errors without logging account secrets.
 
 Current cloud results and limitations are recorded in [../VALIDATION.md](../VALIDATION.md). This repository contains source firmware; a board binary is only produced after a successful PlatformIO build. Cloud package installation currently requires the PlatformIO registry domains enabled in environment settings.

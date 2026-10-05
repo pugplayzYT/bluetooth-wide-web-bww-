@@ -6,15 +6,23 @@
 #if !defined(CONFIG_BT_SPP_ENABLED)
 #error "BWW requires an ORIGINAL ESP32 with Bluetooth Classic SPP, not an ESP32-S3/C3/C6."
 #endif
+#if CONFIG_BT_ACL_CONNECTIONS < 3
+#error "The Bluedroid build must support at least three ACL connections."
+#endif
+static_assert(bww::MAX_BT_CLIENTS <= BTDM_CONTROLLER_BR_EDR_MAX_ACL_CONN_LIMIT, "Too many controller clients");
+static_assert(bww::MAX_BT_CLIENTS <= CONFIG_BT_ACL_CONNECTIONS, "Too many clients for the compiled Bluedroid host");
 namespace { constexpr EventBits_t SENT = 1, FAILED = 2, CAN_SEND = 4; constexpr int PAIR_BUTTON = 0; }
 BwwBluetooth* BwwBluetooth::instance_ = nullptr;
 bool BwwBluetooth::begin(const char* name) {
     instance_ = this; name_ = name;
-    receive_ = xQueueCreate(4096, sizeof(uint8_t)); transmit_ = xEventGroupCreate();
-    if (!receive_ || !transmit_) return false;
+    for (auto& client : buffers_) {
+        client.receive = xQueueCreate(4096, sizeof(uint8_t)); client.transmit = xEventGroupCreate();
+        if (!client.receive || !client.transmit) return false;
+    }
     pinMode(PAIR_BUTTON, INPUT_PULLUP);
     esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
     esp_bt_controller_config_t config = BT_CONTROLLER_INIT_CONFIG_DEFAULT(); config.mode = ESP_BT_MODE_CLASSIC_BT;
+    config.bt_max_acl_conn = bww::MAX_BT_CLIENTS;
     if (esp_bt_controller_init(&config) != ESP_OK || esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT) != ESP_OK || esp_bluedroid_init() != ESP_OK || esp_bluedroid_enable() != ESP_OK) return false;
     if (esp_bt_gap_register_callback(gapCallback) != ESP_OK || esp_spp_register_callback(sppCallback) != ESP_OK) return false;
     uint8_t capability = ESP_BT_IO_CAP_IO;
@@ -32,29 +40,37 @@ void BwwBluetooth::sppCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t* par
         break;
     case ESP_SPP_START_EVT:
         Serial.println(param->start.status == ESP_SPP_SUCCESS ? "READY Bluetooth: pair with BWW-ESP32 in Android settings" : "Bluetooth SPP listener failed"); break;
-    case ESP_SPP_SRV_OPEN_EVT:
+    case ESP_SPP_SRV_OPEN_EVT: {
         if (param->srv_open.status != ESP_SPP_SUCCESS) break;
-        if (self->handle_) { esp_spp_disconnect(param->srv_open.handle); break; }
-        xQueueReset(self->receive_); xEventGroupClearBits(self->transmit_, SENT | FAILED);
-        self->handle_ = param->srv_open.handle; xEventGroupSetBits(self->transmit_, CAN_SEND); Serial.println("Authenticated Bluetooth client connected"); break;
-    case ESP_SPP_DATA_IND_EVT:
-        if (param->data_ind.handle != self->handle_) break;
-        for (size_t i = 0; i < param->data_ind.len; ++i) if (xQueueSend(self->receive_, &param->data_ind.data[i], 0) != pdTRUE) { self->disconnect(); break; }
+        int index = self->clients_.add(param->srv_open.handle);
+        if (index < 0) { esp_spp_disconnect(param->srv_open.handle); break; }
+        auto& client = self->buffers_[index];
+        xQueueReset(client.receive); xEventGroupClearBits(client.transmit, SENT | FAILED);
+        xEventGroupSetBits(client.transmit, CAN_SEND); Serial.println("Authenticated Bluetooth client connected (maximum 3)"); break;
+    }
+    case ESP_SPP_DATA_IND_EVT: {
+        int index = self->clients_.find(param->data_ind.handle); if (index < 0) break;
+        for (size_t i = 0; i < param->data_ind.len; ++i)
+            if (xQueueSend(self->buffers_[index].receive, &param->data_ind.data[i], 0) != pdTRUE) { self->disconnect(index, param->data_ind.handle); break; }
         break;
-    case ESP_SPP_WRITE_EVT:
-        if (param->write.handle == self->handle_) {
-            if (param->write.cong) xEventGroupClearBits(self->transmit_, CAN_SEND); else xEventGroupSetBits(self->transmit_, CAN_SEND);
-            xEventGroupSetBits(self->transmit_, param->write.status == ESP_SPP_SUCCESS ? SENT : FAILED);
-        }
+    }
+    case ESP_SPP_WRITE_EVT: {
+        int index = self->clients_.find(param->write.handle); if (index < 0) break;
+        auto events = self->buffers_[index].transmit;
+        if (param->write.cong) xEventGroupClearBits(events, CAN_SEND); else xEventGroupSetBits(events, CAN_SEND);
+        xEventGroupSetBits(events, param->write.status == ESP_SPP_SUCCESS ? SENT : FAILED); break;
+    }
+    case ESP_SPP_CONG_EVT: {
+        int index = self->clients_.find(param->cong.handle); if (index < 0) break;
+        if (param->cong.cong) xEventGroupClearBits(self->buffers_[index].transmit, CAN_SEND); else xEventGroupSetBits(self->buffers_[index].transmit, CAN_SEND);
         break;
-    case ESP_SPP_CONG_EVT:
-        if (param->cong.handle == self->handle_) {
-            if (param->cong.cong) xEventGroupClearBits(self->transmit_, CAN_SEND); else xEventGroupSetBits(self->transmit_, CAN_SEND);
-        }
-        break;
-    case ESP_SPP_CLOSE_EVT:
-        if (param->close.handle == self->handle_) { self->handle_ = 0; xQueueReset(self->receive_); xEventGroupSetBits(self->transmit_, FAILED); Serial.println("Bluetooth client disconnected"); }
-        break;
+    }
+    case ESP_SPP_CLOSE_EVT: {
+        int index = self->clients_.find(param->close.handle); if (index < 0) break;
+        xEventGroupSetBits(self->buffers_[index].transmit, FAILED);
+        self->clients_.release(index, param->close.handle);
+        xQueueReset(self->buffers_[index].receive); Serial.println("Bluetooth client disconnected"); break;
+    }
     default: break;
     }
 }
@@ -82,20 +98,32 @@ void BwwBluetooth::handlePairing() {
     if (millis() - pairingAt_ > 60000) { answer = true; accept = false; }
     if (answer) { esp_bt_gap_ssp_confirm_reply(pairingAddress_, accept); pairingPending_ = false; Serial.println(accept ? "Pairing approved" : "Pairing rejected"); }
 }
-int BwwBluetooth::available() const { return receive_ ? uxQueueMessagesWaiting(receive_) : 0; }
-int BwwBluetooth::read() { uint8_t byte; return receive_ && xQueueReceive(receive_, &byte, 0) == pdTRUE ? byte : -1; }
-bool BwwBluetooth::write(const uint8_t* bytes, size_t size) {
+int BwwBluetooth::available(size_t index) const { return index < bww::MAX_BT_CLIENTS && buffers_[index].receive ? uxQueueMessagesWaiting(buffers_[index].receive) : 0; }
+int BwwBluetooth::read(size_t index, uint32_t handle) {
+    uint8_t byte; return connected(index, handle) && xQueueReceive(buffers_[index].receive, &byte, 0) == pdTRUE ? byte : -1;
+}
+EventBits_t BwwBluetooth::wait(size_t index, uint32_t handle, EventBits_t bits, bool clear) {
+    uint32_t started = millis();
+    while (connected(index, handle) && millis() - started < 20000) {
+        auto result = xEventGroupWaitBits(buffers_[index].transmit, bits, clear ? pdTRUE : pdFALSE, pdFALSE, pdMS_TO_TICKS(5));
+        if (result & bits) return result;
+        handlePairing(); if (cooperate_) cooperate_();
+    }
+    return 0;
+}
+bool BwwBluetooth::write(size_t index, uint32_t handle, const uint8_t* bytes, size_t size) {
     while (size) {
-        uint32_t client = handle_; if (!client) return false;
+        if (!connected(index, handle)) return false;
         size_t chunk = size > 512 ? 512 : size;
-        auto ready = xEventGroupWaitBits(transmit_, CAN_SEND | FAILED, pdFALSE, pdFALSE, pdMS_TO_TICKS(20000));
-        if (!(ready & CAN_SEND) || (ready & FAILED) || handle_ != client) { disconnect(); return false; }
-        xEventGroupClearBits(transmit_, SENT | FAILED);
-        if (esp_spp_write(client, chunk, const_cast<uint8_t*>(bytes)) != ESP_OK) return false;
-        auto result = xEventGroupWaitBits(transmit_, SENT | FAILED, pdTRUE, pdFALSE, pdMS_TO_TICKS(20000));
-        if (!(result & SENT) || (result & FAILED) || handle_ != client) { disconnect(); return false; }
+        auto ready = wait(index, handle, CAN_SEND | FAILED, false);
+        if (!(ready & CAN_SEND) || (ready & FAILED) || !connected(index, handle)) { disconnect(index, handle); return false; }
+        xEventGroupClearBits(buffers_[index].transmit, SENT | FAILED);
+        if (esp_spp_write(handle, chunk, const_cast<uint8_t*>(bytes)) != ESP_OK) { disconnect(index, handle); return false; }
+        auto result = wait(index, handle, SENT | FAILED, true);
+        if (!(result & SENT) || (result & FAILED) || !connected(index, handle)) { disconnect(index, handle); return false; }
         bytes += chunk; size -= chunk;
+        if (cooperate_) cooperate_();
     }
     return true;
 }
-void BwwBluetooth::disconnect() { uint32_t client = handle_; if (client) esp_spp_disconnect(client); }
+void BwwBluetooth::disconnect(size_t index, uint32_t handle) { if (connected(index, handle)) esp_spp_disconnect(handle); }

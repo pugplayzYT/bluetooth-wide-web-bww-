@@ -1,4 +1,4 @@
-# Validation of version 0.3.0
+# Validation of version 0.4.0
 
 Verified in the Linux cloud workspace:
 
@@ -8,11 +8,12 @@ Verified in the Linux cloud workspace:
 | Wire-protocol integration suite | 5 scenarios passed, none skipped |
 | Windows x64 self-contained single-file publish | Passed; generated PE32+ console executable |
 | Android debug APK build (SDK 35, full JDK 21, Gradle 8.9) | Passed |
-| Android JVM tests | 16 tests passed, zero failures/errors/skips |
+| Android JVM tests | 20 tests passed, zero failures/errors/skips |
 | Instrumented Android test APK | Compiled; 3 device tests added, not executed in this cloud |
 | Android lint | Passed; zero errors, one reviewed warning for enabling JavaScript |
 | Android APK signature | Valid APK Signature Scheme v2, one debug signer |
-| Portable firmware C++ core (g++ with warnings as errors) | Built successfully; 10 integration tests passed |
+| Portable firmware C++ core (g++ with warnings as errors) | Built successfully; 16 integration tests passed |
+| Firmware Bluetooth slot registry | Three clients accepted; fourth rejected; reuse/stale callbacks checked |
 | Firmware PBKDF2 implementation | Matched OpenSSL reference output |
 | ESP32 PlatformIO cross-build | Blocked: cloud policy denies PlatformIO registry downloads (HTTP 403) |
 | Development server smoke check | Protocol-1 hello and site listing succeeded on loopback TCP |
@@ -28,3 +29,5 @@ Generated binaries are development artifacts, not a published GitHub release. Th
 Firmware tests exercise the actual C++ core with ArduinoJson 6.21.5 and a temporary filesystem adapter, including failed SD snapshot writes, previous-snapshot recovery, checksum corruption, ownership, quotas, UTF-8 site limits, session persistence/expiry, and malformed/coalesced JSON frames. They do not compile or validate the ESP-IDF Bluetooth/Arduino SD adapters. The ESP32 target binary, device flashing, real SD wiring, ESP32 heap usage, and Bluetooth pairing/transfer remain unverified. The PlatformIO project pins espressif32 6.9.0 and ArduinoJson 6.21.5; CI includes its cross-build and native tests, but a successful GitHub Actions run is not claimed here.
 
 Required network additions were saved to the cloud environment draft: `api.registry.platformio.org`, `dl.registry.platformio.org`, and `registry.platformio.org`. Review and save the environment network settings to unblock toolchain installation; saving the draft alone does not change the running network policy.
+
+Version 0.4 host validation includes full 512 KiB Unicode publish/read/reboot via bounded 8 KiB chunks, three interleaved independent session uploads, fourth-upload rejection, session binding, concurrent domain claims, commit rollback with retained chunks, previous-snapshot recovery, upload expiry/reboot cleanup, corrupt chunk rejection, and revision mismatch handling. The Android JVM suite additionally checks 512 KiB Unicode chunk round trips, emoji boundaries, malformed hex, and malformed UTF-8. These results do not establish actual three-phone Bluetooth throughput or ESP32 heap usage. The controller, per-client receive/spool scheduler, and ephemeral AES request spooling remain subject to ESP32 cross-build/device validation.

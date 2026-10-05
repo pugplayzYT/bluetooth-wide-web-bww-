@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <array>
 #include "BwwConfig.h"
 namespace bww {
 class Storage {
@@ -12,6 +13,8 @@ public:
     virtual bool mkdir(const std::string& path) = 0;
     virtual bool readJson(const std::string& path, JsonDocument& doc) = 0;
     virtual bool writeJson(const std::string& path, const JsonDocument& doc) = 0;
+    virtual bool writeBytes(const std::string& path, const std::string& bytes) = 0;
+    virtual bool readBytes(const std::string& path, size_t maxBytes, std::string& bytes) = 0;
     virtual bool remove(const std::string& path) = 0;
     virtual std::vector<std::string> files(const std::string& directory) = 0;
 };
@@ -58,6 +61,19 @@ private:
     bool ready_ = false;
     int active_ = 0;
     uint64_t clock_ = 0, checkpoint_ = 0;
+    struct Chunk { size_t bytes; std::string hash; };
+    struct Upload {
+        std::string id, domain, owner, session;
+        uint64_t touched = 0;
+        size_t bytes = 0;
+        bool htmlNonempty = false;
+        std::array<std::vector<Chunk>, 3> chunks;
+    };
+    std::vector<Upload> uploads_;
+    void transfer(JsonDocument& rpc, const std::string& op, const std::string& owner);
+    bool canPublish(const std::string& domain, const std::string& owner, JsonDocument& rpc);
+    bool readSite(JsonDocument& rpc, JsonObjectConst record);
+    bool validChunks(JsonObjectConst data);
     bool validState(JsonDocument& state);
     bool commit();
     void pruneSites();

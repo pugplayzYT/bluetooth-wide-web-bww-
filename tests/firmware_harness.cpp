@@ -1,5 +1,6 @@
 #include "BwwCore.h"
 #include "RequestFrame.h"
+#include "ClientSlots.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -23,6 +24,16 @@ public:
         if (!file) return false;
         if (failNextState && name.find("/state-") != std::string::npos) { failNextState = false; file << "{incomplete"; return false; }
         serializeJson(doc, file); file.flush(); return file.good();
+    }
+    bool writeBytes(const std::string& name, const std::string& bytes) override {
+        std::ofstream file(path(name), std::ios::binary | std::ios::trunc);
+        file.write(bytes.data(), bytes.size()); file.flush(); return file.good();
+    }
+    bool readBytes(const std::string& name, size_t maxBytes, std::string& bytes) override {
+        std::ifstream file(path(name), std::ios::binary | std::ios::ate);
+        if (!file || file.tellg() < 0 || static_cast<size_t>(file.tellg()) > maxBytes) return false;
+        bytes.resize(static_cast<size_t>(file.tellg())); file.seekg(0);
+        file.read(bytes.data(), bytes.size()); return file.good();
     }
     bool remove(const std::string& name) override { std::error_code e; std::filesystem::remove(path(name), e); return !e; }
     std::vector<std::string> files(const std::string& directory) override {
@@ -63,6 +74,12 @@ public:
 };
 int main(int argc, char** argv) {
     NativeCrypto crypto;
+    if (argc == 2 && std::string(argv[1]) == "--slots-check") {
+        ClientSlots slots;
+        if (slots.add(10) != 0 || slots.add(20) != 1 || slots.add(30) != 2 || slots.add(40) != -1 || slots.find(20) != 1) return 1;
+        if (!slots.release(1, 20) || slots.add(40) != 1 || slots.release(1, 20) || slots.handle(1) != 40 || slots.find(20) != -1 || slots.add(0) != -1 || slots.add(40) != 1) return 1;
+        std::cout << "Three client slots preserve isolation and reject stale callbacks/fourth clients\n"; return 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "--crypto-check") {
         std::string password = "correct horse battery", saltHex(32, '0'); std::vector<uint8_t> salt; unhex(saltHex, salt);
         uint8_t expected[32];

@@ -12,6 +12,7 @@ import java.util.concurrent.*;
 final class BwwConnection implements Closeable {
     static final UUID SERVICE = BluetoothServices.BWW;
     private volatile boolean validated;
+    private volatile int chunkBytes;
     private volatile int maxSiteBytes = 524288;
     int maxSiteBytes() { return maxSiteBytes; }
     private volatile BluetoothSocket socket;
@@ -38,6 +39,10 @@ final class BwwConnection implements Closeable {
                     JSONObject hello = request(new JSONObject().put("op", "hello"));
                     if (hello.getInt("protocol") != 1) throw new IOException("Unsupported server protocol");
                     maxSiteBytes = BluetoothServices.siteLimit(hello.optInt("maxSiteBytes", 524288));
+                    if ("chunk-v1".equals(hello.optString("siteTransfer"))) {
+                        chunkBytes = hello.getInt("chunkBytes");
+                        if (chunkBytes < 4 || chunkBytes > SiteChunks.MAX_CHUNK_BYTES) throw new IOException("Unsupported server chunk size");
+                    }
                     validated = true; return;
                 } catch (IOException | org.json.JSONException | IllegalArgumentException e) { last = e; disconnect(); }
             }
@@ -72,10 +77,52 @@ final class BwwConnection implements Closeable {
         catch (IOException e) { disconnect(); throw e; }
         finally { timeout.cancel(false); }
     }
-    JSONObject request(JSONObject request) throws Exception { return envelope(request).getJSONObject("data"); }
+    private JSONObject direct(JSONObject request) throws Exception { return envelope(request).getJSONObject("data"); }
+    synchronized JSONObject request(JSONObject request) throws Exception {
+        if (chunkBytes > 0 && "publish".equals(request.optString("op"))) return publishChunks(request);
+        JSONObject result = direct(request);
+        if ("get".equals(request.optString("op")) && "chunk-v1".equals(result.optString("transferMode"))) {
+            JSONObject chunks = result.getJSONObject("chunks"); long total = 0; int count = 0;
+            for (String asset : new String[]{"html", "css", "js"}) {
+                org.json.JSONArray entries = chunks.getJSONArray(asset); ByteArrayOutputStream content = new ByteArrayOutputStream();
+                for (int i = 0; i < entries.length(); ++i) {
+                    if (++count > maxSiteBytes / SiteChunks.MAX_CHUNK_BYTES + 3) throw new IOException("Too many site chunks");
+                    int expected = entries.getJSONObject(i).getInt("bytes");
+                    if (expected < 1 || expected > SiteChunks.MAX_CHUNK_BYTES || total + expected > maxSiteBytes) throw new IOException("Site exceeds server size limit");
+                    JSONObject reply = direct(new JSONObject().put("op","get_chunk").put("domain",result.getString("domain")).put("revision",result.getLong("revision")).put("asset",asset).put("index",i));
+                    byte[] bytes = SiteChunks.unhex(reply.getString("data"));
+                    if (bytes.length != expected) throw new IOException("Site chunk length mismatch");
+                    content.write(bytes); total += bytes.length;
+                }
+                result.put(asset, SiteChunks.utf8(content.toByteArray()));
+            }
+        }
+        return result;
+    }
+    private JSONObject publishChunks(JSONObject request) throws Exception {
+        String token = request.getString("token"); long total = 0;
+        for (String asset : new String[]{"html", "css", "js"}) total += request.getString(asset).getBytes(StandardCharsets.UTF_8).length;
+        if (total > maxSiteBytes) throw new IOException("Site exceeds server size limit");
+        JSONObject begin = direct(new JSONObject().put("op","publish_begin").put("token",token).put("domain",request.getString("domain")));
+        String transfer = begin.getString("transfer");
+        try {
+            for (String asset : new String[]{"html", "css", "js"}) {
+                byte[] bytes = request.getString(asset).getBytes(StandardCharsets.UTF_8); int index = 0;
+                for (int start = 0; start < bytes.length; ++index) {
+                    int end = SiteChunks.end(bytes, start, chunkBytes);
+                    direct(new JSONObject().put("op","publish_chunk").put("token",token).put("transfer",transfer).put("asset",asset).put("index",index).put("data",SiteChunks.hex(bytes,start,end)));
+                    start = end;
+                }
+            }
+            return direct(new JSONObject().put("op","publish_commit").put("token",token).put("transfer",transfer));
+        } catch (Exception e) {
+            if (connected()) try { direct(new JSONObject().put("op","publish_cancel").put("token",token).put("transfer",transfer)); } catch (Exception ignored) { }
+            throw e;
+        }
+    }
     void disconnect() {
         BluetoothSocket s = socket;
-        socket = null; validated = false; maxSiteBytes = 524288;
+        socket = null; validated = false; chunkBytes = 0; maxSiteBytes = 524288;
         if (s != null) try { s.close(); } catch (IOException ignored) { }
     }
     boolean connected() { BluetoothSocket s = socket; return validated && s != null && s.isConnected(); }

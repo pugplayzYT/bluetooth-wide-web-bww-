@@ -4,6 +4,10 @@
 #include <set>
 namespace bww {
 namespace {
+const char* assets[] = {"html", "css", "js"};
+std::string chunkPath(const std::string& id, int asset, size_t index) {
+    return "/bww/sites/" + id + "." + assets[asset] + "." + std::to_string(index) + ".bin";
+}
 std::string slot(int number) { return "/bww/state-" + std::to_string(number) + ".json"; }
 std::string trimLower(std::string value) {
     auto space = [](unsigned char c) { return std::isspace(c); };
@@ -98,7 +102,7 @@ bool Core::validState(JsonDocument& state) {
     return true;
 }
 bool Core::begin() {
-    ready_ = false;
+    ready_ = false; uploads_.clear();
     if (state_.capacity() != STATE_CAPACITY || !storage_.mkdir("/bww") || !storage_.mkdir("/bww/sites")) return false;
     bool any = storage_.exists(slot(0)) || storage_.exists(slot(1)), found = false; uint64_t best = 0;
     DynamicJsonDocument candidate(STATE_CAPACITY);
@@ -139,10 +143,30 @@ void Core::pruneSites() {
     DynamicJsonDocument backup(STATE_CAPACITY);
     if (storage_.readJson(slot(1 - active_), backup) && validState(backup))
         for (JsonObjectConst s : backup["sites"].as<JsonArrayConst>()) keep.insert(sitePath(s));
-    for (const auto& path : storage_.files("/bww/sites")) if (path.size() > 5 && path.substr(path.size() - 5) == ".json" && !keep.count(path)) storage_.remove(path);
+    bool pruneChunks = true;
+    DynamicJsonDocument metadata(RPC_CAPACITY);
+    std::vector<std::string> manifests(keep.begin(), keep.end());
+    for (const auto& path : manifests) {
+        if (!storage_.readJson(path, metadata)) { pruneChunks = false; continue; }
+        JsonObjectConst d = metadata["data"];
+        if (d["transferMode"] == "chunk-v1") {
+            if (!validChunks(d)) { pruneChunks = false; continue; }
+            std::string id = d["transfer"].as<std::string>();
+            for (int a = 0; a < 3; ++a) for (size_t i = 0; i < d["chunks"][assets[a]].size(); ++i) keep.insert(chunkPath(id, a, i));
+        }
+    }
+    for (const auto& u : uploads_) for (int a = 0; a < 3; ++a) for (size_t i = 0; i < u.chunks[a].size(); ++i) keep.insert(chunkPath(u.id, a, i));
+    for (const auto& path : storage_.files("/bww/sites")) {
+        bool manifest = path.size() > 5 && path.substr(path.size() - 5) == ".json";
+        bool chunk = path.size() > 4 && path.substr(path.size() - 4) == ".bin";
+        if (!keep.count(path) && (manifest || (chunk && pruneChunks))) storage_.remove(path);
+    }
 }
 bool Core::advance(uint32_t seconds) {
     clock_ += seconds;
+    auto before = uploads_.size();
+    uploads_.erase(std::remove_if(uploads_.begin(), uploads_.end(), [&](const Upload& u) { return clock_ - u.touched >= UPLOAD_IDLE_SECONDS; }), uploads_.end());
+    if (before != uploads_.size()) pruneSites();
     if (ready_ && clock_ - checkpoint_ >= CLOCK_CHECKPOINT_SECONDS) return commit();
     return ready_;
 }
@@ -164,6 +188,7 @@ void Core::execute(JsonDocument& rpc) {
     if (!field(r, "op", 32, op, rpc)) return;
     if (op == "hello") {
         auto d = success(rpc); d["protocol"] = 1; d["name"] = "Bluetooth-wide Web ESP32"; d["maxSiteBytes"] = MAX_SITE_BYTES;
+        d["maxBtClients"] = MAX_BT_CLIENTS; d["siteTransfer"] = "chunk-v1"; d["chunkBytes"] = CHUNK_BYTES;
         d["maxUsers"] = MAX_USERS; d["maxSites"] = MAX_SITES; d["sessionClock"] = "powered-time"; return;
     }
     if (op == "register" || op == "login") {
@@ -195,8 +220,11 @@ void Core::execute(JsonDocument& rpc) {
         auto d = success(rpc); d["username"] = name; d["token"] = token; d["expires"] = nullptr; d["expiresAfterPoweredSeconds"] = SESSION_POWERED_SECONDS; return;
     }
     std::string name;
-    if (op == "me" || op == "logout" || op == "mine" || op == "publish" || op == "delete") {
+    if (op == "me" || op == "logout" || op == "mine" || op == "publish" || op == "delete" || op == "publish_begin" || op == "publish_chunk" || op == "publish_commit" || op == "publish_cancel") {
         name = identity(r); if (name.empty()) { failure(rpc, "unauthorized", "Sign in again; your session is missing or expired"); return; }
+    }
+    if (op == "publish_begin" || op == "publish_chunk" || op == "publish_commit" || op == "publish_cancel" || op == "get_chunk") {
+        transfer(rpc, op, name); return;
     }
     if (op == "me") { success(rpc)["username"] = name; return; }
     if (op == "logout") {
@@ -221,12 +249,7 @@ void Core::execute(JsonDocument& rpc) {
     if (op == "available") { auto d = success(rpc); d["domain"] = domain; d["available"] = record.isNull(); return; }
     if (op == "get") {
         if (record.isNull()) { failure(rpc, "not_found", "Site not found on this server"); return; }
-        auto path = sitePath(record); std::string owner = record["owner"].as<std::string>(); uint64_t revision = record["revision"];
-        rpc.clear();
-        if (!storage_.readJson(path, rpc) || rpc["ok"] != true || rpc["data"]["domain"] != domain || rpc["data"]["owner"] != owner || rpc["data"]["revision"].as<uint64_t>() != revision || !constantTimeEqual(rpc["digest"] | "", crypto_.jsonDigest(rpc["data"]))) {
-            failure(rpc, "storage_error", "Published site is damaged or unreadable; restore or republish it"); return;
-        }
-        rpc.remove("digest"); return;
+        readSite(rpc, record); return;
     }
     if (!record.isNull() && name != record["owner"].as<const char*>()) { failure(rpc, op == "publish" ? "domain_taken" : "forbidden", "Only the owner may change this site"); return; }
     if (op == "delete") {
@@ -237,8 +260,8 @@ void Core::execute(JsonDocument& rpc) {
         success(rpc)["deleted"] = true; return;
     }
     std::string html, css, js;
-    if (!field(r, "html", MAX_SITE_BYTES, html, rpc) || !field(r, "css", MAX_SITE_BYTES, css, rpc) || !field(r, "js", MAX_SITE_BYTES, js, rpc)) return;
-    if (html.size() + css.size() + js.size() > MAX_SITE_BYTES) { failure(rpc, "too_large", "ESP32 site limit is 16 KiB combined HTML/CSS/JS"); return; }
+    if (!field(r, "html", INLINE_SITE_BYTES, html, rpc) || !field(r, "css", INLINE_SITE_BYTES, css, rpc) || !field(r, "js", INLINE_SITE_BYTES, js, rpc)) return;
+    if (html.size() + css.size() + js.size() > INLINE_SITE_BYTES) { failure(rpc, "too_large", "Use chunk-v1 transfers for sites larger than 16 KiB; total site limit is 512 KiB"); return; }
     if (html.empty() || std::all_of(html.begin(), html.end(), [](unsigned char c) { return std::isspace(c); })) { failure(rpc, "empty_site", "HTML is required"); return; }
     if (record.isNull()) {
         size_t own = 0; for (JsonObjectConst s : state_["sites"].as<JsonArrayConst>()) if (name == s["owner"].as<const char*>()) ++own;

@@ -3,11 +3,13 @@
 #include <SD.h>
 #include <esp_system.h>
 #include <mbedtls/md.h>
+#include <mbedtls/aes.h>
 #include <mbedtls/sha256.h>
 #include "BwwCore.h"
 #include "BwwBluetooth.h"
 #include "RequestFrame.h"
 using namespace bww;
+void pumpNetwork();
 class SdStorage : public Storage {
 public:
     bool exists(const std::string& path) override { return SD.exists(path.c_str()); }
@@ -23,6 +25,17 @@ public:
         File file = SD.open(path.c_str(), FILE_WRITE); if (!file) return false;
         size_t expected = measureJson(doc), written = serializeJson(doc, file);
         file.flush(); bool ok = written == expected && file.size() == expected; file.close(); return ok;
+    }
+    bool writeBytes(const std::string& path, const std::string& bytes) override {
+        if (exists(path) && !SD.remove(path.c_str())) return false;
+        File file = SD.open(path.c_str(), FILE_WRITE); if (!file) return false;
+        size_t written = file.write(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
+        file.flush(); bool ok = written == bytes.size() && file.size() == bytes.size(); file.close(); return ok;
+    }
+    bool readBytes(const std::string& path, size_t maxBytes, std::string& bytes) override {
+        File file = SD.open(path.c_str(), FILE_READ);
+        if (!file || file.isDirectory() || file.size() > maxBytes) return false;
+        bytes.resize(file.size()); size_t read = file.read(reinterpret_cast<uint8_t*>(bytes.data()), bytes.size()); file.close(); return read == bytes.size();
     }
     bool remove(const std::string& path) override { return !exists(path) || SD.remove(path.c_str()); }
     std::vector<std::string> files(const std::string& directory) override {
@@ -61,31 +74,72 @@ public:
         auto hmac = [&](const uint8_t* data, size_t size, uint8_t out[32]) {
             return mbedtls_md_hmac_reset(&context) == 0 && mbedtls_md_hmac_update(&context, data, size) == 0 && mbedtls_md_hmac_finish(&context, out) == 0;
         };
-        uint8_t digest[32]; ok = ok && pbkdf2(salt, hmac, [] { delay(1); }, digest);
+        uint8_t digest[32]; ok = ok && pbkdf2(salt, hmac, [] { pumpNetwork(); delay(1); }, digest);
         mbedtls_md_free(&context); return ok ? hex(digest, 32) : "";
     }
 };
-class BluetoothInput {
-    BwwBluetooth& link_; uint32_t started_ = millis();
-public:
-    explicit BluetoothInput(BwwBluetooth& link) : link_(link) {}
-    int read() {
-        while (link_.connected() && millis() - started_ < 120000) { int c = link_.read(); if (c >= 0) return c; link_.handlePairing(); delay(1); }
-        return -1;
-    }
-};
 class ReplyWriter {
-    BwwBluetooth& link_; uint8_t buffer_[512]; size_t count_ = 0;
+    BwwBluetooth& link_; size_t index_; uint32_t handle_; uint8_t buffer_[512]; size_t count_ = 0;
 public:
     bool good = true;
-    explicit ReplyWriter(BwwBluetooth& link) : link_(link) {}
+    ReplyWriter(BwwBluetooth& link, size_t index, uint32_t handle) : link_(link), index_(index), handle_(handle) {}
     size_t write(uint8_t byte) { if (!good) return 0; buffer_[count_++] = byte; if (count_ == sizeof(buffer_)) flush(); return good ? 1 : 0; }
     size_t write(const uint8_t* data, size_t count) { size_t i = 0; while (i < count && write(data[i])) ++i; return i; }
-    void flush() { if (count_) { good = good && link_.write(buffer_, count_); count_ = 0; } }
+    void flush() { if (count_) { good = good && link_.write(index_, handle_, buffer_, count_); count_ = 0; } }
 };
 SdStorage disk; DeviceCrypto crypto; Core core(disk, crypto); BwwBluetooth bluetooth;
 DynamicJsonDocument rpc(RPC_CAPACITY);
-bool initialized = false; uint32_t clockAt = 0;
+bool initialized = false; uint32_t clockAt = 0; size_t nextClient = 0;
+// Spool only ciphertext: the AES key changes each boot and stays in RAM.
+mbedtls_aes_context spoolCipher;
+struct Incoming { uint8_t nonce[16] = {}, counter[16] = {}, streamBlock[16] = {}; size_t cipherOffset = 0; uint32_t handle = 0, started = 0; size_t bytes = 0; File file; bool ready = false, failed = false; };
+Incoming incoming[MAX_BT_CLIENTS];
+std::string requestPath(size_t index) { return "/bww/request-" + std::to_string(index) + ".enc"; }
+class SpoolInput {
+    File& file_; uint8_t counter_[16], stream_[16] = {}, buffer_[512]; size_t offset_ = 0, used_ = 0, available_ = 0;
+public:
+    bool good = true;
+    SpoolInput(File& file, const uint8_t nonce[16]) : file_(file) { memcpy(counter_, nonce, 16); }
+    int read() {
+        if (!good) return -1;
+        if (used_ == available_) {
+            available_ = file_.read(buffer_, sizeof(buffer_)); used_ = 0;
+            if (!available_) return -1;
+            if (mbedtls_aes_crypt_ctr(&spoolCipher, available_, &offset_, counter_, stream_, buffer_, buffer_) != 0) { good = false; return -1; }
+        }
+        return buffer_[used_++];
+    }
+};
+// Called from the main loop, password hashing, and transmission waits. SD access
+// stays on one task; Bluetooth callbacks only enqueue into each client's queue.
+void pumpNetwork() {
+    bluetooth.handlePairing();
+    for (size_t index = 0; index < MAX_BT_CLIENTS; ++index) {
+        auto& frame = incoming[index]; uint32_t handle = bluetooth.clientHandle(index);
+        if (frame.handle != handle) {
+            frame.file.close(); SD.remove(requestPath(index).c_str());
+            frame.handle = handle; frame.started = 0; frame.bytes = 0; frame.ready = frame.failed = false;
+        }
+        if (!handle || frame.ready || frame.failed) continue;
+        if (frame.started && millis() - frame.started > 120000) { frame.file.close(); frame.failed = true; bluetooth.disconnect(index, handle); continue; }
+        if (!bluetooth.available(index)) continue;
+        if (!frame.file) {
+            SD.remove(requestPath(index).c_str()); frame.file = SD.open(requestPath(index).c_str(), FILE_WRITE); frame.started = millis();
+            esp_fill_random(frame.nonce, sizeof(frame.nonce)); memcpy(frame.counter, frame.nonce, sizeof(frame.counter));
+            memset(frame.streamBlock, 0, sizeof(frame.streamBlock)); frame.cipherOffset = 0;
+            if (!frame.file) { frame.failed = true; bluetooth.disconnect(index, handle); continue; }
+        }
+        uint8_t buffer[512]; size_t count = 0;
+        while (count < sizeof(buffer)) {
+            int byte = bluetooth.read(index, handle); if (byte < 0) break;
+            if (byte != '\n' && ++frame.bytes > MAX_WIRE_BYTES) { frame.failed = true; bluetooth.disconnect(index, handle); break; }
+            buffer[count++] = static_cast<uint8_t>(byte);
+            if (byte == '\n') { frame.ready = true; break; }
+        }
+        if (count && (mbedtls_aes_crypt_ctr(&spoolCipher, count, &frame.cipherOffset, frame.counter, frame.streamBlock, buffer, buffer) != 0 || frame.file.write(buffer, count) != count)) { frame.failed = true; frame.ready = false; bluetooth.disconnect(index, handle); }
+        if (frame.ready || frame.failed) { frame.file.flush(); frame.file.close(); }
+    }
+}
 void setup() {
     Serial.begin(115200); delay(300);
     Serial.println("Bluetooth-wide Web ESP32: SD CS=5 SCK=18 MOSI=23 MISO=19");
@@ -94,20 +148,35 @@ void setup() {
         Serial.println("SD/storage initialization failed. Check wiring, FAT32, power, and /bww backups. No data is automatically formatted or reset."); return;
     }
     if (!bluetooth.begin("BWW-ESP32")) { Serial.println("Bluetooth initialization failed: original ESP32 Classic required"); return; }
+    uint8_t key[32]; esp_fill_random(key, sizeof(key)); mbedtls_aes_init(&spoolCipher);
+    int cipherResult = mbedtls_aes_setkey_enc(&spoolCipher, key, 256); memset(key, 0, sizeof(key));
+    if (cipherResult != 0) { Serial.println("Request spool encryption initialization failed"); return; }
+    for (size_t index = 0; index < MAX_BT_CLIENTS; ++index) SD.remove(requestPath(index).c_str());
+    bluetooth.setCooperate(pumpNetwork);
     initialized = true; clockAt = millis();
 }
 void loop() {
     if (!initialized) { delay(1000); return; }
-    bluetooth.handlePairing();
+    pumpNetwork();
     uint32_t now = millis(), seconds = (now - clockAt) / 1000;
     if (seconds) { clockAt += seconds * 1000; if (!core.advance(seconds)) Serial.println("SD clock checkpoint failed"); }
-    if (!bluetooth.connected() || !bluetooth.available()) { delay(1); return; }
-    BluetoothInput input(bluetooth); RequestFrame<BluetoothInput> frame(input);
-    rpc.clear(); auto result = deserializeJson(rpc, frame, DeserializationOption::NestingLimit(16));
-    bool clean = frame.finish();
-    if (!frame.complete() || frame.tooLarge) { bluetooth.disconnect(); rpc.clear(); return; }
-    if (result || !clean) failure(rpc, result == DeserializationError::NoMemory ? "too_large" : "invalid_json", "Invalid or oversized JSON request");
-    else core.execute(rpc);
-    ReplyWriter output(bluetooth); serializeJson(rpc, output); output.write('\n'); output.flush();
-    rpc.clear(); if (!output.good) bluetooth.disconnect(); delay(10);
+    for (size_t offset = 0; offset < MAX_BT_CLIENTS; ++offset) {
+        size_t index = (nextClient + offset) % MAX_BT_CLIENTS;
+        auto& pending = incoming[index]; if (!pending.ready) continue;
+        uint32_t handle = pending.handle;
+        File input = SD.open(requestPath(index).c_str(), FILE_READ);
+        SpoolInput plaintext(input, pending.nonce); RequestFrame<SpoolInput> frame(plaintext);
+        rpc.clear(); auto result = deserializeJson(rpc, frame, DeserializationOption::NestingLimit(16));
+        bool clean = frame.finish(); input.close(); SD.remove(requestPath(index).c_str());
+        pending.ready = false; pending.bytes = 0; pending.started = 0;
+        if (!frame.complete() || frame.tooLarge) { bluetooth.disconnect(index, handle); rpc.clear(); }
+        else {
+            if (result || !clean) failure(rpc, result == DeserializationError::NoMemory ? "too_large" : "invalid_json", "Invalid or oversized JSON request");
+            else core.execute(rpc);
+            ReplyWriter output(bluetooth, index, handle); serializeJson(rpc, output); output.write('\n'); output.flush();
+            rpc.clear(); if (!output.good) bluetooth.disconnect(index, handle);
+        }
+        nextClient = (index + 1) % MAX_BT_CLIENTS; break;
+    }
+    delay(1);
 }
