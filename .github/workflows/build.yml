@@ -26,7 +26,7 @@ jobs:
           python3 tests/integration.py
       - name: Android build and lint
         working-directory: android
-        run: ./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug
+        run: ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug
       - name: Package Windows server
         run: dotnet publish server -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:NuGetLockFilePath=obj/packages.publish.lock.json -o artifacts/windows-x64
       - uses: actions/upload-artifact@v4

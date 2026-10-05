@@ -28,5 +28,5 @@ proxy = urllib.parse.urlsplit(env.get('HTTPS_PROXY', ''))
 if proxy.hostname:
     for scheme in ('https', 'http'):
         args += [f'-D{scheme}.proxyHost={proxy.hostname}', f'-D{scheme}.proxyPort={proxy.port or 80}']
-run(args + ['assembleDebug', 'testDebugUnitTest', 'lintDebug'], root/'android')
+run(args + ['assembleDebug', 'assembleDebugAndroidTest', 'testDebugUnitTest', 'lintDebug'], root/'android')
 print('C# build, protocol integration tests, Android APK build and Android lint completed.')

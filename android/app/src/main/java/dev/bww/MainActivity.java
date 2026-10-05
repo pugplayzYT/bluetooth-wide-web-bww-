@@ -27,7 +27,13 @@ public class MainActivity extends Activity {
     private TextView status, account;
     private EditText address;
     private WebView web;
-    private LinearLayout root;
+    private LinearLayout root, chrome;
+    private FrameLayout website;
+    private Button exitFullScreen;
+    private View customView;
+    private WebChromeClient.CustomViewCallback customViewCallback;
+    private boolean fullScreen, customWasFullScreen;
+    private int topInset, bottomInset;
     private boolean busy;
 
     interface Job { void run() throws Exception; }
@@ -36,26 +42,31 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("bww", MODE_PRIVATE);
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(16), dp(10), dp(16), 0); root.setBackgroundColor(Color.rgb(244,247,245));
+        chrome = new LinearLayout(this); chrome.setOrientation(LinearLayout.VERTICAL);
+        chrome.setId(R.id.browser_controls); root.addView(chrome);
         root.setOnApplyWindowInsetsListener((v, insets) -> {
-            v.setPadding(dp(16), dp(10) + insets.getSystemWindowInsetTop(), dp(16), insets.getSystemWindowInsetBottom());
+            topInset = insets.getSystemWindowInsetTop(); bottomInset = insets.getSystemWindowInsetBottom();
+            updateBrowserPadding();
             return insets;
         });
-        TextView title = text("Bluetooth-wide Web", 24); title.setTypeface(null, android.graphics.Typeface.BOLD); root.addView(title);
-        root.addView(text("A little web, right around you.", 14));
-        status = text("Pair your computer in Bluetooth settings, then connect.", 13); root.addView(status);
+        TextView title = text("Bluetooth-wide Web", 24); title.setTypeface(null, android.graphics.Typeface.BOLD); chrome.addView(title);
+        chrome.addView(text("A little web, right around you.", 14));
+        status = text("Pair your computer in Bluetooth settings, then connect.", 13); chrome.addView(status);
         LinearLayout toolbar = row();
         toolbar.addView(button("Connect", v -> chooseServer()));
         toolbar.addView(button("Sites", v -> listSites(false)));
-        toolbar.addView(button("Account", v -> accountDialog())); root.addView(toolbar);
-        account = text("Browsing as a guest", 13); root.addView(account);
+        toolbar.addView(button("Account", v -> accountDialog())); chrome.addView(toolbar);
+        account = text("Browsing as a guest", 13); chrome.addView(account);
         LinearLayout url = row(); address = new EditText(this); address.setSingleLine(true);
         address.setHint("bww://my-site.bww"); address.setInputType(17);
         url.addView(address, new LinearLayout.LayoutParams(0, -2, 1));
-        url.addView(button("Go", v -> browse(address.getText().toString()))); root.addView(url);
+        url.addView(button("Go", v -> browse(address.getText().toString()))); chrome.addView(url);
         address.setOnEditorActionListener((v, action, event) -> { browse(address.getText().toString()); return true; });
         LinearLayout author = row(); author.addView(button("Create Site", v -> editor(null)));
-        author.addView(button("My Sites", v -> listSites(true))); root.addView(author);
-        web = new WebView(this);
+        author.addView(button("My Sites", v -> listSites(true)));
+        Button expand = button(getString(R.string.full_screen), v -> setFullScreen(true));
+        expand.setId(R.id.full_screen); author.addView(expand); chrome.addView(author);
+        web = new WebView(this); web.setId(R.id.site_webview);
         WebSettings settings = web.getSettings(); settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false); settings.setAllowContentAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
@@ -65,8 +76,11 @@ public class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
-                if (request.isForMainFrame() && "https".equals(uri.getScheme()) && uri.getHost() != null && uri.getHost().endsWith(".bww")) {
-                    if (!"/".equals(uri.getPath()) && !"/index.html".equals(uri.getPath())) { notice("Only index.html, style.css, and script.js are supported"); return true; }
+                if (request.isForMainFrame() && ("https".equals(uri.getScheme()) || "bww".equals(uri.getScheme())) && uri.getHost() != null && uri.getHost().endsWith(".bww")) {
+                    if (uri.getPath() != null && !uri.getPath().isEmpty() && !SiteContent.pagePath(uri.getPath())) { notice("Only index.html, style.css, and script.js are supported"); return true; }
+                    // Let in-page anchors keep the current document and JavaScript state.
+                    Uri current = web.getUrl() == null ? null : Uri.parse(web.getUrl());
+                    if (uri.getFragment() != null && current != null && "https".equals(uri.getScheme()) && uri.getUserInfo() == null && uri.getPort() == current.getPort() && uri.getHost().equals(current.getHost()) && Objects.equals(uri.getPath(), current.getPath())) return false;
                     browse(uri.toString());
                 } else if (request.isForMainFrame()) notice("Only Bluetooth-wide Web sites can open here");
                 return true;
@@ -76,8 +90,24 @@ public class MainActivity extends Activity {
             }
             @Override public void onReceivedSslError(WebView view, android.webkit.SslErrorHandler handler, android.net.http.SslError error) { handler.cancel(); }
         });
-        web.setWebChromeClient(new WebChromeClient());
-        root.addView(web, new LinearLayout.LayoutParams(-1, 0, 1)); setContentView(root);
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override public void onShowCustomView(View view, CustomViewCallback callback) {
+                if (customView != null) { callback.onCustomViewHidden(); return; }
+                customWasFullScreen = fullScreen; customView = view; customViewCallback = callback;
+                website.addView(view, new FrameLayout.LayoutParams(-1, -1)); web.setVisibility(View.GONE);
+                setFullScreen(true);
+            }
+            @Override public void onHideCustomView() { hideCustomView(); }
+        });
+        website = new FrameLayout(this); website.addView(web, new FrameLayout.LayoutParams(-1, -1));
+        root.addView(website, new LinearLayout.LayoutParams(-1, 0, 1));
+        FrameLayout screen = new FrameLayout(this); screen.addView(root, new FrameLayout.LayoutParams(-1, -1));
+        exitFullScreen = button(getString(R.string.exit_full_screen), v -> exitFullScreen());
+        exitFullScreen.setId(R.id.exit_full_screen); exitFullScreen.setVisibility(View.GONE);
+        FrameLayout.LayoutParams exitPosition = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+        exitPosition.setMargins(dp(8), dp(8), dp(8), 0); screen.addView(exitFullScreen, exitPosition);
+        setContentView(screen);
+        if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
         web.loadDataWithBaseURL("https://welcome.bww/", "<html><meta name='viewport' content='width=device-width'><body style='font-family:sans-serif;padding:24px;color:#173e35'><h1>Welcome to your nearby web.</h1><p>1. Start BWW on your Windows computer.</p><p>2. Pair your phone with the computer.</p><p>3. Tap Connect and choose it.</p><p>Browse sites, or sign in to publish your own HTML, CSS, and JavaScript.</p></body></html>", "text/html", "UTF-8", null);
     }
     private int dp(int n) { return (int)(getResources().getDisplayMetrics().density * n); }
@@ -123,7 +153,6 @@ public class MainActivity extends Activity {
             BluetoothDevice device = devices.get(i);
             task("Connecting", () -> {
                 connection.disconnect(); connection.connect(device);
-                boolean changedServer = !device.getAddress().equals(server);
                 server = device.getAddress(); pages.clear();
                 token = prefs.getString("token:" + server, ""); username = prefs.getString("user:" + server, "");
                 if (!token.isEmpty()) {
@@ -134,7 +163,7 @@ public class MainActivity extends Activity {
                     }
                 }
                 ui(() -> {
-                    if (changedServer) WebStorage.getInstance().deleteAllData();
+                    exitFullScreen();
                     updateAccount(); web.loadUrl("about:blank"); web.clearHistory();
                     notice("Connected. Tap Sites to explore.");
                 });
@@ -178,16 +207,17 @@ public class MainActivity extends Activity {
     }
     private void browse(String value) {
         final String name;
-        try { name = SiteContent.domain(value); } catch (Exception e) { notice(e.getMessage()); return; }
+        try { name = SiteOrigin.navigationDomain(server, value); } catch (Exception e) { notice(e.getMessage()); return; }
         task("Loading " + name, () -> {
             JSONObject site = connection.request(request("get").put("domain", name));
             pages.clear(); pages.put(name, site);
-            ui(() -> { address.setText(getString(R.string.bww_address, name)); web.loadUrl("https://" + name + "/index.html"); });
+            ui(() -> { address.setText(getString(R.string.bww_address, name)); web.loadUrl(SiteOrigin.pageUrl(server, name)); });
         });
     }
     private WebResourceResponse resource(Uri uri) {
         String mime = "text/plain", content = "Resource unavailable"; int code = 404;
-        JSONObject site = "https".equals(uri.getScheme()) ? pages.get(uri.getHost()) : null;
+        String domain = "https".equals(uri.getScheme()) && uri.getPort() == -1 && uri.getUserInfo() == null ? SiteOrigin.resourceDomain(server, uri.getHost()) : null;
+        JSONObject site = domain == null ? null : pages.get(domain);
         if (site != null) {
             String path = uri.getPath();
             if (SiteContent.pagePath(path)) {
@@ -264,17 +294,55 @@ public class MainActivity extends Activity {
         form.addView(text(label, 14)); EditText field = new EditText(this); field.setTypeface(android.graphics.Typeface.MONOSPACE); field.setTextSize(13);
         field.setInputType(1 | 131072 | 524288); field.setGravity(Gravity.TOP); field.setMinLines(lines); form.addView(field); return field;
     }
-    @Override public void onBackPressed() {
+    @Override public void onBackPressed() { handleBack(); }
+    private void handleBack() {
+        if (fullScreen || customView != null) { exitFullScreen(); return; }
         if (!web.canGoBack()) { super.onBackPressed(); return; }
         WebBackForwardList history = web.copyBackForwardList();
         String url = history.getItemAtIndex(history.getCurrentIndex() - 1).getUrl();
         Uri uri = Uri.parse(url);
         if (uri.getHost() == null || "welcome.bww".equals(uri.getHost())) { web.goBack(); return; }
+        final String name;
+        try { name = SiteOrigin.navigationDomain(server, url); } catch (IllegalArgumentException e) { notice(e.getMessage()); return; }
         task("Loading previous site", () -> {
-            JSONObject site = connection.request(request("get").put("domain", uri.getHost()));
-            pages.clear(); pages.put(uri.getHost(), site);
-            ui(() -> { address.setText(getString(R.string.bww_address, uri.getHost())); web.goBack(); });
+            JSONObject site = connection.request(request("get").put("domain", name));
+            pages.clear(); pages.put(name, site);
+            ui(() -> { address.setText(getString(R.string.bww_address, name)); web.goBack(); });
         });
     }
-    @Override public void onDestroy() { connection.close(); worker.shutdownNow(); web.destroy(); super.onDestroy(); }
+    private void updateBrowserPadding() {
+        root.setPadding(fullScreen ? 0 : dp(16), fullScreen ? 0 : dp(10) + topInset, fullScreen ? 0 : dp(16), fullScreen ? 0 : bottomInset);
+    }
+    private void setFullScreen(boolean enabled) {
+        fullScreen = enabled;
+        chrome.setVisibility(enabled ? View.GONE : View.VISIBLE);
+        exitFullScreen.setVisibility(enabled ? View.VISIBLE : View.GONE);
+        updateBrowserPadding(); applySystemBars();
+        root.requestApplyInsets();
+    }
+    private void applySystemBars() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller != null) {
+                controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                if (fullScreen) controller.hide(WindowInsets.Type.systemBars());
+                else controller.show(WindowInsets.Type.systemBars());
+            }
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(fullScreen
+                ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                : View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        }
+    }
+    private void hideCustomView() {
+        if (customView == null) return;
+        website.removeView(customView); web.setVisibility(View.VISIBLE);
+        WebChromeClient.CustomViewCallback callback = customViewCallback;
+        customView = null; customViewCallback = null;
+        setFullScreen(customWasFullScreen);
+        callback.onCustomViewHidden();
+    }
+    private void exitFullScreen() { hideCustomView(); setFullScreen(false); }
+    @Override public void onWindowFocusChanged(boolean focused) { super.onWindowFocusChanged(focused); if (focused && fullScreen) applySystemBars(); }
+    @Override public void onDestroy() { hideCustomView(); connection.close(); worker.shutdownNow(); web.destroy(); super.onDestroy(); }
 }

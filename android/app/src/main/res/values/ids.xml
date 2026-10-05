@@ -1,0 +1,6 @@
+<resources>
+    <item name="browser_controls" type="id"/>
+    <item name="site_webview" type="id"/>
+    <item name="full_screen" type="id"/>
+    <item name="exit_full_screen" type="id"/>
+</resources>

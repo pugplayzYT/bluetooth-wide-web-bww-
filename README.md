@@ -21,15 +21,34 @@ Build outputs in this workspace:
 
 The server persists accounts, hashed session tokens, and sites in `%LOCALAPPDATA%\Bww\store.json`. Stop the server before backing up that file. To use another storage location, run `./Bww.Server.exe --data C:\path\store.json`. One server process may own a store at a time. Do not delete the store unless you intend to remove all accounts and sites. Sessions remain valid across server restarts; signing out revokes that session.
 
+Tap **Full screen** to hide the app controls and system bars while viewing a website. The page keeps running without a reload. Tap **Exit full screen** or press Android Back to return; Back exits full-screen before navigating away. HTML/video fullscreen requests from WebView also use this view, with an always-available exit button.
+
 Editor drafts save locally as you type, separately by server and account. Reopening Create Site or the relevant existing site restores its draft. Publishing removes that draft; Close retains it; Discard draft removes it. A disconnected device can retain a draft, but publishing needs a live connection.
 
 ## Site format and boundaries
 
 Each site contains three UTF-8 text assets: `index.html`, `style.css`, and `script.js`, limited to **512 KiB combined**. The browser automatically includes the CSS and JavaScript assets. HTML may be a full document or a fragment. Use data URLs for small images/fonts. Other paths, uploads, external scripts/images, fetch requests, forms, iframes, and Internet navigation are not supported in this version. Links between BWW domains load another site from the same server.
 
-The WebView internally uses an intercepted `https://domain.bww/` origin to isolate each site's browser storage. `.bww` does not resolve through Internet DNS. Site JavaScript runs inside the WebView with no native bridge or access to account tokens. Browser storage is cleared when switching computers, since two computers can host the same domain. Local file access and content-provider access are disabled, and the app has no Internet permission. CSP restricts content to these local assets and inline scripts/styles. HTML and JavaScript are intentionally executable site content, not sanitized text.
+The WebView internally uses an intercepted HTTPS origin containing the site label and a stable identifier derived from the paired computer's Bluetooth address. This isolates browser storage by **computer and website**, while the visible URL remains `bww://domain.bww`. `.bww` does not resolve through Internet DNS. Site JavaScript runs inside the WebView with no native bridge or access to account tokens. Website local storage is retained across reconnects, app restarts, and switching between computers; the same domain on another computer has separate data. Local file access and content-provider access are disabled, and the app has no Internet permission. CSP restricts content to these local assets and inline scripts/styles. HTML and JavaScript are intentionally executable site content, not sanitized text.
 
 Passwords use salted PBKDF2-SHA256 with 210,000 iterations. Session tokens are random 256-bit values; the server stores only their SHA-256 digest. Bluetooth uses the secure Android RFCOMM API and the server requires link authentication/encryption before handling requests. There is no additional application-layer encryption or independent server certificate; trust the computer you pair with. Domain ownership is server-side. Each account may publish up to 50 sites and keep up to 10 active sessions; the server handles up to 16 simultaneous connections. This is intended for trusted nearby peers, not a hardened public multi-tenant service. The local Windows user and anyone who can read the data file can access published content and password hashes. Forgotten-password recovery is not implemented.
+
+### Save a score with local storage
+
+Sites can use the standard JavaScript `localStorage` API; no special permissions or native bridge are needed:
+
+```javascript
+// Load the saved high score when the page opens.
+let bestScore = Number(localStorage.getItem("bestScore") || "0");
+
+// Save a new high score.
+function saveScore(score) {
+  bestScore = Math.max(bestScore, score);
+  localStorage.setItem("bestScore", String(bestScore));
+}
+```
+
+This data lives on the Android phone, separately for each site on each computer. It is not uploaded to the server or synchronized to other phones, and it is independent of the native BWW login account. Updating a site keeps its saved data. Uninstalling the app or clearing its Android app data removes it; normal WebView storage quotas still apply. Upgrading from version 0.1 uses new isolated origins; data from the old shared origins is not imported because its computer cannot be identified safely.
 
 ## Build and test
 
@@ -42,7 +61,7 @@ dotnet restore server --locked-mode
 dotnet build server -c Release --no-restore
 python3 tests/integration.py
 cd android
-./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug
+./gradlew --no-daemon assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug
 ```
 
 On Windows use `gradlew.bat`. To package the server from the repository root:
@@ -59,7 +78,7 @@ For Linux/macOS development, the same server supports **loopback-only TCP**, usi
 dotnet run --project server -- --tcp --data /tmp/bww-dev/store.json
 ```
 
-This does not turn the Android Bluetooth client into a TCP client. Five Android JVM tests cover domain normalization, rejected addresses, HTML asset injection, fragments, and routing restrictions; these do not run Android WebView on a device. The integration suite starts its own isolated TCP servers and tests registration, authentication, publishing, ownership, concurrent domain collision, persisted sites/sessions after restart, logout, expiration, limits, malformed messages, and fragmented/coalesced frames. It uses temporary stores, not your real account data.
+This does not turn the Android Bluetooth client into a TCP client. Twelve Android JVM tests cover domain normalization, rejected addresses, HTML asset injection, fragments, routing restrictions, and stable computer/site storage isolation; these do not run Android WebView on a device. Three instrumented Android tests exercise actual WebView local storage across activity recreation and computer/site switching, native full-screen exit controls, and HTML custom-view exit callbacks. Their APK is compiled by CI, but running them requires a connected Android device/emulator: `cd android && ./gradlew connectedDebugAndroidTest`. They load test sites through the real app resource interceptor and require no Bluetooth computer. Instrumentation uses an isolated set of test site/computer identities to avoid touching real scores. The integration suite starts its own isolated TCP servers and tests registration, authentication, publishing, ownership, concurrent domain collision, persisted sites/sessions after restart, logout, expiration, limits, malformed messages, and fragmented/coalesced frames. It uses temporary stores, not your real account data.
 
 In this prepared cloud snapshot, `python3 scripts/cloud_build.py` uses the retained SDKs in `/workspace/.tools`, writable caches, and the platform's existing HTTPS proxy. Proxy values and account credentials are not embedded in the repository. Cloud tasks already have an isolated checkout; use it directly without creating a Git worktree.
 
@@ -72,6 +91,8 @@ The C# build, protocol integration suite, Windows cross-publish, and Android com
 - Connect a second Android phone, sign in as a different account, and confirm it can browse but cannot claim/update the first account's domain.
 - Disable Bluetooth or walk out of range. Confirm connection errors appear; reconnect, reopen a saved draft, and publish again.
 - Revoke Bluetooth permission and confirm the app asks for it on the next connection attempt.
+- Tap Full screen while playing a game. Confirm the controls and system bars hide, the page keeps running, and both Exit full screen and Android Back restore the browser. Test an HTML/video fullscreen request too.
+- Use localStorage to save a score, fully close/reopen the app, reconnect, and reopen the same site. Confirm the score remains. Switch to another computer hosting the same domain and confirm its score is separate; return to the first computer and confirm its original score remains.
 
 If Connect fails, verify the server says READY Bluetooth, Windows Bluetooth is enabled, the devices are paired, and the chosen device is the Windows computer. The server uses classic Bluetooth, not BLE; BLE-only adapters are insufficient. Use the console to inspect startup errors. There is no macOS/Linux Bluetooth host implementation enabled in this app.
 
