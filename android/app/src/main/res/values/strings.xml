@@ -1,5 +1,10 @@
 <resources>
     <string name="progress">%1$s…</string>
+    <string name="signing_in">Signing in</string>
+    <string name="creating_account">Creating your account</string>
+    <string name="authentication_progress">%1$s…\n%2$s</string>
+    <string name="esp32_auth_wait">Your ESP32 is securely checking your password. Its small processor can take 10–20 seconds or longer. Please keep the app open while it finishes.</string>
+    <string name="auth_wait">Waiting for your server. Please keep the app open while it finishes.</string>
     <string name="bww_address" translatable="false">bww://%1$s</string>
     <string name="full_screen">Full screen</string>
     <string name="exit_full_screen">Exit full screen</string>

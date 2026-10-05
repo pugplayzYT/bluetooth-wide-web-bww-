@@ -10,6 +10,8 @@ The project includes a Windows console server, a standalone ESP32 + SD card host
 
 ## Use the built app
 
+[Download Android app 0.4.1](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Android-0.4.1.apk). This development APK adds a loading spinner for sign-in and registration. When the paired Bluetooth name starts with `BWW-ESP32`, it explains that secure password checking can take 10–20 seconds or longer on the board's small processor. Other hosts show a general waiting message. This app update works with the existing firmware; it does not require reflashing the ESP32. Buttons are disabled during authentication and restored on failure so a request cannot accidentally be submitted twice.
+
 Build outputs in this workspace:
 
 - `artifacts/windows-x64/Bww.Server.exe`: self-contained Windows x64 server; .NET need not be installed to run it.

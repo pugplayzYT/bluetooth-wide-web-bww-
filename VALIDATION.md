@@ -1,5 +1,9 @@
 # Validation
 
+## Android 0.4.1 authentication loading UI
+
+The Android app now displays an indeterminate spinner in its account dialog during login and registration, with an ESP32 explanation selected by the paired device's `BWW-ESP32` name prefix. It restores controls after failure and dismisses the dialog on success. It uses the existing authentication protocol and requires no firmware change. Android APK build and all 20 existing JVM tests passed with no failures/errors/skips; the existing instrumented test APK compiled. Lint passed with only the previously reviewed JavaScript warning, and the APK's v2 signature verified. No Android device is available here to verify the spinner rendering, keyboard behavior, or Bluetooth authentication in person. The downloadable APK is signed with the workspace's development key.
+
 ## Firmware 0.4.3 publish transport fix
 
 The actual Bluetooth adapter passed a host regression harness with bounded fake FreeRTOS queues and a simulated main-task consumer. Three clients each received 16,480 bytes in interleaved bursts through 4 KiB queues, preserving every byte and client isolation without disconnecting. A non-draining consumer disconnected only its client with a diagnostic. A slowly draining consumer exhausted the two-second total indication budget rather than renewing the timeout per byte. The previous 0.4.2 adapter fails the same lossless-burst regression due to its immediate queue-full disconnect. Startup/linking and 13 failure-diagnostic checks also passed. This simulates queue scheduling, not Bluetooth radio, SD or FreeRTOS timing on a physical board.

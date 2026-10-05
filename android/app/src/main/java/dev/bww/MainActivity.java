@@ -23,7 +23,7 @@ public class MainActivity extends Activity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Map<String, JSONObject> pages = new ConcurrentHashMap<>();
     private SharedPreferences prefs;
-    private String server = "", token = "", username = "";
+    private String server = "", serverName = "", token = "", username = "";
     private TextView status, account;
     private EditText address;
     private WebView web;
@@ -117,6 +117,9 @@ public class MainActivity extends Activity {
     private void notice(String value) { runOnUiThread(() -> Toast.makeText(this, value, Toast.LENGTH_LONG).show()); }
     private void ui(Runnable action) { runOnUiThread(() -> { if (!isFinishing() && !isDestroyed()) action.run(); }); }
     private void task(String label, Job job) {
+        task(label, job, () -> {});
+    }
+    private void task(String label, Job job, Runnable finished) {
         if (busy) { notice("Please wait for the current operation"); return; }
         busy = true; status.setText(getString(R.string.progress, label));
         worker.execute(() -> {
@@ -126,7 +129,7 @@ public class MainActivity extends Activity {
                     token = ""; username = ""; prefs.edit().remove("token:" + server).remove("user:" + server).apply(); ui(this::updateAccount);
                 }
                 ui(() -> { status.setText(connection.connected() ? "Connected · " + server : "Disconnected · tap Connect"); notice(e.getMessage() == null ? "Operation failed" : e.getMessage()); });
-            } finally { ui(() -> busy = false); }
+            } finally { ui(() -> { busy = false; finished.run(); }); }
         });
     }
     private JSONObject request(String op) throws JSONException { return new JSONObject().put("op", op); }
@@ -153,7 +156,7 @@ public class MainActivity extends Activity {
             BluetoothDevice device = devices.get(i);
             task("Connecting", () -> {
                 connection.disconnect(); connection.connect(device);
-                server = device.getAddress(); pages.clear();
+                server = device.getAddress(); serverName = device.getName(); pages.clear();
                 token = prefs.getString("token:" + server, ""); username = prefs.getString("user:" + server, "");
                 if (!token.isEmpty()) {
                     try { username = connection.request(authenticated("me")).getString("username"); }
@@ -188,17 +191,39 @@ public class MainActivity extends Activity {
         EditText user = new EditText(this); user.setHint("Username (3–32 letters/numbers/_)"); user.setSingleLine(true); user.setInputType(1 | 524288);
         EditText password = new EditText(this); password.setHint("Password (at least 10 characters)"); password.setInputType(129);
         form.addView(user); form.addView(password);
+        LinearLayout loading = row(); loading.setGravity(Gravity.CENTER_VERTICAL);
+        loading.setVisibility(View.GONE);
+        ProgressBar spinner = new ProgressBar(this); spinner.setIndeterminate(true);
+        spinner.setId(R.id.authentication_progress);
+        loading.addView(spinner, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        TextView explanation = text("", 14); explanation.setPadding(dp(12), dp(8), 0, dp(8));
+        explanation.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        loading.addView(explanation, new LinearLayout.LayoutParams(0, -2, 1)); form.addView(loading);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Your account on this server").setView(form)
             .setPositiveButton("Sign in", null).setNeutralButton("Register", null).setNegativeButton("Cancel", null).create();
         dialog.setOnShowListener(d -> {
             View.OnClickListener login = v -> {
+                if (busy) { notice("Please wait for the current operation"); return; }
                 String name = user.getText().toString(), pass = password.getText().toString();
                 String op = v == dialog.getButton(AlertDialog.BUTTON_NEUTRAL) ? "register" : "login";
-                task("Signing in", () -> {
+                String label = getString("register".equals(op) ? R.string.creating_account : R.string.signing_in);
+                boolean esp32 = serverName != null && serverName.startsWith("BWW-ESP32");
+                explanation.setText(getString(R.string.authentication_progress, label, getString(esp32 ? R.string.esp32_auth_wait : R.string.auth_wait)));
+                spinner.setContentDescription(label); loading.setVisibility(View.VISIBLE);
+                android.view.inputmethod.InputMethodManager keyboard = (android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
+                if (keyboard != null) keyboard.hideSoftInputFromWindow(password.getWindowToken(), 0);
+                user.setEnabled(false); password.setEnabled(false);
+                for (int which : new int[]{AlertDialog.BUTTON_POSITIVE, AlertDialog.BUTTON_NEUTRAL, AlertDialog.BUTTON_NEGATIVE}) dialog.getButton(which).setEnabled(false);
+                dialog.setCancelable(false); dialog.setCanceledOnTouchOutside(false);
+                task(label, () -> {
                     JSONObject result = connection.request(request(op).put("username", name).put("password", pass));
                     token = result.getString("token"); username = result.getString("username");
                     prefs.edit().putString("token:" + server, token).putString("user:" + server, username).apply();
                     ui(() -> { password.setText(""); dialog.dismiss(); updateAccount(); });
+                }, () -> {
+                    loading.setVisibility(View.GONE); user.setEnabled(true); password.setEnabled(true);
+                    for (int which : new int[]{AlertDialog.BUTTON_POSITIVE, AlertDialog.BUTTON_NEUTRAL, AlertDialog.BUTTON_NEGATIVE}) dialog.getButton(which).setEnabled(true);
+                    dialog.setCancelable(true); dialog.setCanceledOnTouchOutside(true);
                 });
             };
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(login);
