@@ -6,3 +6,4 @@ android/local.properties
 artifacts/
 *.user
 __pycache__/
+**/.pio/

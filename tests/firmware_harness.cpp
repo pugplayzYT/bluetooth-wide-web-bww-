@@ -1,0 +1,88 @@
+#include "BwwCore.h"
+#include "RequestFrame.h"
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/rand.h>
+using namespace bww;
+class Disk : public Storage {
+    std::filesystem::path root_;
+public:
+    bool failNextState = false;
+    explicit Disk(const char* path) : root_(path) {}
+    std::filesystem::path path(const std::string& name) { return root_ / name.substr(1); }
+    bool exists(const std::string& name) override { return std::filesystem::exists(path(name)); }
+    bool mkdir(const std::string& name) override { std::error_code e; std::filesystem::create_directories(path(name), e); return !e; }
+    bool readJson(const std::string& name, JsonDocument& doc) override {
+        doc.clear(); std::ifstream file(path(name)); return file && !deserializeJson(doc, file, DeserializationOption::NestingLimit(16));
+    }
+    bool writeJson(const std::string& name, const JsonDocument& doc) override {
+        std::ofstream file(path(name), std::ios::trunc | std::ios::binary);
+        if (!file) return false;
+        if (failNextState && name.find("/state-") != std::string::npos) { failNextState = false; file << "{incomplete"; return false; }
+        serializeJson(doc, file); file.flush(); return file.good();
+    }
+    bool remove(const std::string& name) override { std::error_code e; std::filesystem::remove(path(name), e); return !e; }
+    std::vector<std::string> files(const std::string& directory) override {
+        std::vector<std::string> result;
+        for (auto& p : std::filesystem::directory_iterator(path(directory))) if (p.is_regular_file()) result.push_back(directory + "/" + p.path().filename().string());
+        return result;
+    }
+};
+class HashWriter {
+    EVP_MD_CTX* context_;
+public:
+    bool good = true;
+    explicit HashWriter(EVP_MD_CTX* context) : context_(context) {}
+    size_t write(uint8_t byte) { return write(&byte, 1); }
+    size_t write(const uint8_t* bytes, size_t count) { if (EVP_DigestUpdate(context_, bytes, count) != 1) good = false; return good ? count : 0; }
+};
+class NativeCrypto : public Crypto {
+public:
+    std::string randomHex(size_t bytes) override {
+        std::vector<uint8_t> data(bytes); return RAND_bytes(data.data(), data.size()) == 1 ? hex(data.data(), data.size()) : "";
+    }
+    std::string sha256(const std::string& value) override {
+        uint8_t digest[32]; unsigned length; return EVP_Digest(value.data(), value.size(), digest, &length, EVP_sha256(), nullptr) == 1 ? hex(digest, 32) : "";
+    }
+    std::string jsonDigest(JsonVariantConst value) override {
+        EVP_MD_CTX* ctx = EVP_MD_CTX_new(); if (!ctx) return "";
+        EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr); HashWriter writer(ctx); serializeJson(value, writer);
+        uint8_t digest[32]; unsigned length; bool ok = writer.good && EVP_DigestFinal_ex(ctx, digest, &length) == 1;
+        EVP_MD_CTX_free(ctx); return ok ? hex(digest, 32) : "";
+    }
+    std::string passwordHash(const std::string& password, const std::string& saltHex) override {
+        std::vector<uint8_t> salt; if (!unhex(saltHex, salt) || salt.size() != 16) return "";
+        auto hmac = [&](const uint8_t* input, size_t size, uint8_t out[32]) {
+            unsigned length; return HMAC(EVP_sha256(), password.data(), password.size(), input, size, out, &length) && length == 32;
+        };
+        uint8_t digest[32]; return pbkdf2(salt, hmac, [] {}, digest) ? hex(digest, 32) : "";
+    }
+};
+int main(int argc, char** argv) {
+    NativeCrypto crypto;
+    if (argc == 2 && std::string(argv[1]) == "--crypto-check") {
+        std::string password = "correct horse battery", saltHex(32, '0'); std::vector<uint8_t> salt; unhex(saltHex, salt);
+        uint8_t expected[32];
+        if (PKCS5_PBKDF2_HMAC(password.data(), password.size(), salt.data(), salt.size(), PASSWORD_ITERATIONS, EVP_sha256(), 32, expected) != 1 || !constantTimeEqual(crypto.passwordHash(password, saltHex), hex(expected, 32))) return 1;
+        std::cout << "Shared PBKDF2 matches OpenSSL reference\n"; return 0;
+    }
+    if (argc != 2) return 1;
+    Disk disk(argv[1]); Core core(disk, crypto); DynamicJsonDocument rpc(RPC_CAPACITY);
+    if (!core.begin()) { std::cerr << "Storage initialization failed\n"; return 2; }
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        struct Source { std::string line; size_t offset = 0; int read() { return offset < line.size() ? static_cast<unsigned char>(line[offset++]) : -1; } } source{line + "\n"};
+        RequestFrame<Source> frame(source);
+        auto error = deserializeJson(rpc, frame, DeserializationOption::NestingLimit(16));
+        bool clean = frame.finish();
+        if (!clean && !error) failure(rpc, "invalid_json", "Trailing data or incomplete frame");
+        else if (error) failure(rpc, error == DeserializationError::NoMemory ? "too_large" : "invalid_json", "Invalid or oversized JSON request");
+        else if (rpc["_test"] == "fail_next_state") { disk.failNextState = true; rpc.clear(); rpc["ok"] = true; rpc.createNestedObject("data"); }
+        else if (rpc["_test"] == "advance") { uint32_t seconds = rpc["seconds"]; bool ok = core.advance(seconds); rpc.clear(); rpc["ok"] = ok; rpc.createNestedObject("data"); }
+        else core.execute(rpc);
+        serializeJson(rpc, std::cout); std::cout << std::endl;
+    }
+}

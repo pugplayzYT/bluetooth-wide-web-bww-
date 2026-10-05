@@ -178,7 +178,7 @@ public class MainActivity extends Activity {
     private void accountDialog() {
         if (!connection.connected()) { notice("Connect to a server first"); return; }
         if (!token.isEmpty()) {
-            new AlertDialog.Builder(this).setTitle("Signed in as " + username).setMessage("Your session is saved for this computer for up to 30 days.")
+            new AlertDialog.Builder(this).setTitle("Signed in as " + username).setMessage("Your session is saved on this server until it expires or you sign out.")
                 .setPositiveButton("Sign out", (d,w) -> task("Signing out", () -> {
                     connection.request(authenticated("logout")); token = ""; username = "";
                     prefs.edit().remove("token:" + server).remove("user:" + server).apply(); ui(this::updateAccount);
@@ -272,14 +272,17 @@ public class MainActivity extends Activity {
                 notice(result.getBoolean("available") ? "Domain is available. Publish to claim it." : "Domain is already published; only its owner can update it.");
             });
         }));
-        form.addView(text("Drafts save on this phone. Published sites save on the computer. Limit: 512 KiB total. Only index.html, style.css and script.js; no external network resources.", 12));
+        form.addView(text(getString(R.string.editor_limits, connection.maxSiteBytes() / 1024), 12));
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle(existing == null ? "Create Site" : "Edit " + existing.optString("domain"))
             .setView(scroll).setPositiveButton("Publish", null).setNegativeButton("Close", null)
             .setNeutralButton(existing == null ? "Discard draft" : "Delete site", null).create();
         dialog.setOnShowListener(d -> {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
                 try {
-                    JSONObject payload = authenticated("publish").put("domain",domain.getText().toString()).put("html",html.getText().toString()).put("css",css.getText().toString()).put("js",js.getText().toString());
+                    String markup = html.getText().toString(), styles = css.getText().toString(), script = js.getText().toString();
+                    long size = (long)markup.getBytes(StandardCharsets.UTF_8).length + styles.getBytes(StandardCharsets.UTF_8).length + script.getBytes(StandardCharsets.UTF_8).length;
+                    if (size > connection.maxSiteBytes()) { notice(getString(R.string.site_too_large, connection.maxSiteBytes() / 1024)); return; }
+                    JSONObject payload = authenticated("publish").put("domain",domain.getText().toString()).put("html",markup).put("css",styles).put("js",script);
                     task("Publishing", () -> { JSONObject result = connection.request(payload); prefs.edit().remove(key).apply(); ui(() -> { dialog.dismiss(); notice("Published · bww://" + result.optString("domain")); }); });
                 } catch (Exception e) { notice(e.getMessage()); }
             });

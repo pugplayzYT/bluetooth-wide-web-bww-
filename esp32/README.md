@@ -1,0 +1,77 @@
+# BWW ESP32 host
+
+This PlatformIO C++ project turns an original ESP32 and SPI SD card into a standalone Bluetooth-wide Web server. The Android app connects, registers/logs in, and creates, edits, browses, and deletes HTML/CSS/JavaScript sites. Accounts and websites live on the SD card. Wi-Fi and an Internet connection are not needed during use.
+
+Use an **original ESP32 with Bluetooth Classic**, such as an ESP32-WROOM-32 development board with at least 4 MB flash. ESP32-S3, C3, C6 and other BLE-only boards cannot run this RFCOMM firmware. The default PlatformIO board is `esp32dev`. This project uses a 3 MB application partition without OTA updates.
+
+## Default wiring
+
+The D labels below mean ESP32 **GPIO numbers**, not another board's pin numbering:
+
+| SD module pin | ESP32 pin |
+| --- | --- |
+| CS | D5 / GPIO5 |
+| CK / CLK / SCK | D18 / GPIO18 |
+| MOSI | D23 / GPIO23 |
+| MISO | D19 / GPIO19 |
+| VCC | Vin **only for an SD module rated for that supply** |
+| GND | GND |
+
+Vin is commonly approximately 5 V on a USB-powered development board. A bare SD card or 3.3 V-only module must use **3.3 V**, not Vin. Confirm your module has the required regulator and compatible SPI level circuitry before connecting Vin. ESP32 GPIOs are not 5 V tolerant. Use a common ground, short wires, and a stable supply. Insert a FAT32 SD card before booting; this firmware never formats the card automatically.
+
+## Build, flash, and pair
+
+Install VS Code with the PlatformIO extension, then open this `esp32` folder as a PlatformIO project. Alternatively install PlatformIO Core 6.1.18 and run from the repository root:
+
+```sh
+python3 -m pip install platformio==6.1.18
+pio run -d esp32
+pio run -d esp32 -t upload
+pio device monitor -d esp32
+```
+
+Specify your serial port if detection is ambiguous, for example `pio run -d esp32 -t upload --upload-port COM5`. On Linux it may be `/dev/ttyUSB0`. If flashing does not start, hold BOOT while the uploader connects. Release BOOT after flashing; holding it during reset enters the bootloader. The monitor runs at 115200 baud.
+
+1. Boot with the SD card connected. The serial monitor must report `READY Bluetooth`.
+2. In Android Bluetooth settings, pair with **BWW-ESP32**. Compare the phone's code with the serial monitor's six-digit code. Approve on the phone, then type `Y` in the monitor or briefly press the board's BOOT button. Type `N` to reject; pairing expires after 60 seconds. Legacy fixed-PIN pairing is rejected.
+3. Install Android app **version 0.3.0 or newer**, tap Connect, and select the paired board. The app supports the ESP32's standard Serial Port Profile UUID as well as the Windows server's custom UUID, and checks BWW protocol 1 before sending account credentials.
+4. Register an account, create a site, and publish. Public browsing does not require login. Domains and accounts belong to this board/card; they are separate from your Windows host.
+
+Website full screen and `localStorage` work in the Android WebView just as with the desktop host. Browser storage stays on each phone, isolated by website and paired Bluetooth host; it is not written to the SD card or synchronized between phones.
+
+## Limits and persistence
+
+| Setting | Firmware default |
+| --- | --- |
+| Simultaneous Bluetooth clients | 1 |
+| HTML + CSS + JavaScript combined | 16 KiB UTF-8 per site |
+| Accounts | 12 |
+| Sites | 24 total, 8 per account |
+| Active sessions | 24 total, 4 per account |
+| Password hashing | Salted PBKDF2-SHA256, 210,000 iterations |
+| Session duration | 30 days of accumulated powered runtime |
+| SD SPI frequency | 4 MHz |
+
+The Android editor displays the connected host's size limit. ESP32 hashing is slower than desktop hashing; login/register may take several seconds. The Android client allows up to 120 seconds for authentication and 60 seconds for other operations.
+
+There is no RTC or Internet clock. Sessions survive reboot, but time while powered off does not count toward expiration. The powered clock is saved on mutations and every five minutes; abrupt power loss can lose up to five minutes. The API reports `expires: null` and `expiresAfterPoweredSeconds`, and site `updated` is null with an increasing `revision`, rather than claiming a calendar timestamp.
+
+The firmware reserves `/bww` on the SD card. Two checksummed state snapshots track users, hashed tokens, and site ownership. Site versions are separately checksummed JSON files under `/bww/sites`. Publishing writes a new site generation before committing the inactive snapshot and checking it back. A truncated latest snapshot can recover the previous valid snapshot; recent changes can be lost during that recovery. If both snapshots are invalid, boot fails without wiping the card. FAT/SD hardware still cannot guarantee survival of every power loss. Back up the entire `/bww` directory with the board powered off, and never remove the card during use. The firmware prunes obsolete site generations inside its reserved directory.
+
+Passwords and raw session tokens are not stored on SD or printed to Serial. People with physical access to the card can read public content and password hashes; keep backups private. Forgotten-password recovery is not implemented. Link authentication and encryption are required by the SPP listener, but there is no independent application certificate.
+
+## Developer guide and validation
+
+Edit `include/BwwConfig.h` to change SD pins and limits. Pin changes also require rewiring; larger JSON limits consume ESP32 heap and must be tested on hardware. `src/BwwCore.cpp` implements the same operations documented in [../PROTOCOL.md](../PROTOCOL.md). `src/main.cpp` adapts SD storage and mbedTLS crypto; `src/BwwBluetooth.cpp` provides secure Classic SPP, numeric pairing confirmation, bounded receiving, and congestion-aware replies. The desktop and SD storage formats are intentionally separate; copying desktop `store.json` to the card is not an import.
+
+After installing PlatformIO dependencies, Linux developers can test the actual portable C++ core using g++ and OpenSSL development headers:
+
+```sh
+python3 scripts/test_firmware.py
+```
+
+Run that command from the repository root. It tests account operations/ownership, quotas, persisted sessions/sites, powered-time expiration, interrupted writes, corrupt snapshots/site content, framing, and PBKDF2 compatibility with OpenSSL. This uses temporary directories and does not touch your card. It does not exercise the ESP-IDF Bluetooth stack or SD electrical behavior.
+
+Before relying on hardware, build and flash it, verify the reported flash/RAM usage, then pair a phone, register, publish near the 16 KiB limit, reconnect and reboot, and verify the saved site/session. Test rejected pairing, a second phone while connected, missing/invalid SD cards, and scores retained in the Android app. Check Serial for mount/pairing errors without logging account secrets.
+
+Current cloud results and limitations are recorded in [../VALIDATION.md](../VALIDATION.md). This repository contains source firmware; a board binary is only produced after a successful PlatformIO build. Cloud package installation currently requires the PlatformIO registry domains enabled in environment settings.
