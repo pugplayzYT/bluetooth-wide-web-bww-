@@ -3,6 +3,7 @@
 #include <SD.h>
 #include <esp_system.h>
 #include <esp_heap_caps.h>
+#include "ActivityLed.h"
 #include <mbedtls/aes.h>
 #include <mbedtls/sha256.h>
 #include "BwwCore.h"
@@ -182,6 +183,8 @@ void pumpNetwork() {
     }
 }
 void setup() {
+    beginActivityLed();
+    bluetooth.setActivity(markActivityLed);
     Serial.begin(115200); delay(300);
     Serial.printf("Bluetooth-wide Web ESP32 firmware %s: SD CS=5 SCK=18 MOSI=23 MISO=19\n", FIRMWARE_VERSION);
     SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);

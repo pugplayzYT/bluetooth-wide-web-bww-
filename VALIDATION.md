@@ -1,5 +1,9 @@
 # Validation
 
+## Activity LED 0.6.2
+
+The original ESP32 target builds with a GPIO2 activity indicator. A native simulation of the actual LED implementation verified idle off, a visible pulse, continuous flashing during repeated traffic, return to off within four 80 ms timer ticks, active-high/active-low wiring and timer-creation failure. The existing fake-SDK Bluetooth adapter checks passed for secure three-client startup, thirteen failure diagnostics, lossless interleaved receive bursts and bounded stalled-reader handling. These checks do not establish physical LED wiring on every ESP32 board. No Android, Windows, SD format or quota change is included.
+
 ## Matching account quotas 0.6.1
 
 PC and ESP32 advertise and enforce **50 websites per account**, without a separate total-site count cap. PC's existing quota is retained; ESP32 checks new-domain inline/chunk/sync publication and rechecks chunk commits. Existing collections above 50 remain readable/editable/deletable; additions require fewer than 50 current sites. The paged SD format, storage reserve, 512 KiB per-site size, and account/session/client bounds remain unchanged. Android 0.6.0 remains compatible.

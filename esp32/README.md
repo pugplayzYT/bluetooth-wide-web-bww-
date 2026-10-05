@@ -4,6 +4,12 @@ This PlatformIO C++ project turns an original ESP32 and SPI SD card into a stand
 
 Use an **original ESP32 with Bluetooth Classic**, such as an ESP32-WROOM-32 development board with at least 4 MB flash. ESP32-S3, C3, C6 and other BLE-only boards cannot run this RFCOMM firmware. The default PlatformIO board is `esp32dev`. This project uses a 3 MB application partition without OTA updates.
 
+## Activity LED
+
+Firmware **0.6.2** flashes the controllable onboard LED while Bluetooth request data is received or sent, including uploads and website downloads. It stays off when idle and stops flashing within about 320 ms of the last traffic. A separate timer keeps the indicator responsive while the main task accesses the SD card; the indicator does not delay transfers. Merely being connected does not keep it lit.
+
+The default is an active-high LED on **GPIO2**, common on original ESP32 development boards. The power LED is wired to the supply and cannot be switched off by firmware. Boards without a GPIO-controlled LED need an external LED with a suitable series resistor. For a different LED, add `-DBWW_ACTIVITY_LED_PIN=your_gpio` to `build_flags` in `platformio.ini`; use `-DBWW_ACTIVITY_LED_ACTIVE_LOW=1` for an active-low LED, or pin `-1` to disable it. Choose a free GPIO, avoiding the SD card's GPIO5/18/23/19 and BOOT GPIO0.
+
 ## Default wiring
 
 The D labels below mean ESP32 **GPIO numbers**, not another board's pin numbering:
@@ -21,7 +27,7 @@ Vin is commonly approximately 5 V on a USB-powered development board. A bare SD 
 
 ## Build, flash, and pair
 
-[Download the ESP32-only PlatformIO project (version 0.6.1)](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/raw/refs/heads/main/downloads/Bww-ESP32-PlatformIO-0.6.1.zip). Extract the ZIP, then open its `esp32` folder in VS Code. This download contains the firmware source and configuration; host-side tests require the full repository.
+[Download the ESP32-only PlatformIO project (version 0.6.2)](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/raw/refs/heads/main/downloads/Bww-ESP32-PlatformIO-0.6.2.zip). Extract the ZIP, then open its `esp32` folder in VS Code. This download contains the firmware source and configuration; host-side tests require the full repository.
 
 Version **0.6.1** sets the same **50-websites-per-account** quota as the PC server while retaining the SD-backed index and removing the old separate 24-websites-per-device limit. Website records live in checksummed SD catalog pages containing at most eight entries, with three page slots protecting the active snapshot, fallback snapshot and pending write. Total website storage depends on detected free SD space, with a 128 KiB reserve for metadata and recovery. The existing 12-account limit still applies. Existing over-quota collections from 0.6.0 are kept and can be edited or deleted; only new domains are refused at/above 50. Individual sites retain the 512 KiB limit; the 12-account and session/client limits still apply. All 0.5.2 crash/commit memory protections remain included.
 
@@ -31,7 +37,7 @@ Version **0.5.1** patches the upload-start cleanup memory problem seen in `prune
 
 The patch keeps GPIO5/18/23/19 wiring, three Bluetooth clients, the 512 KiB site limit, and existing SD accounts/site content. It also includes 0.5.0 conditional publication, so Android 0.5.0 can safely retry interrupted uploads. Updating firmware does not format the card.
 
-[Download prebuilt ESP32 0.6.1 binaries](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-ESP32-Binaries-0.6.1.zip) if you prefer flashing without compiling. The ZIP includes `firmware.bin`, the matching `firmware.elf` for crash decoding, and upgrade instructions. For VS Code/PlatformIO, use the source ZIP above: extract it, open **its `esp32` folder**, close the serial monitor, and click **Upload**. Replacing files alone does not flash the board. Confirm `firmware 0.6.1` and `READY Bluetooth` afterward.
+[Download prebuilt ESP32 0.6.2 binaries](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-ESP32-Binaries-0.6.2.zip) if you prefer flashing without compiling. The ZIP includes `firmware.bin`, the matching `firmware.elf` for crash decoding, and upgrade instructions. For VS Code/PlatformIO, use the source ZIP above: extract it, open **its `esp32` folder**, close the serial monitor, and click **Upload**. Replacing files alone does not flash the board. Confirm `firmware 0.6.2` and `READY Bluetooth` afterward.
 
 Version 0.5.0 adds authenticated account website comparison and conditional Bluetooth sync from the Windows host. [The sync guide](../SYNC_README.md) covers device selection/pairing, reviewing differences, choosing transfer directions and approving changes. Existing accounts/sites remain compatible; Android does not need an update. Passwords and sessions are not copied. Earlier startup, password-hashing and receive-queue fixes remain included.
 
@@ -39,7 +45,7 @@ Version 0.4.3 fixes disconnection when an upload burst fills the 4 KiB receive q
 
 Version 0.4.2 speeds password hashing by preparing the HMAC key states once per login/signup and yielding by elapsed time. It preserves PBKDF2-SHA256's 210,000 iterations and the existing account format; no account migration is needed. Serial reports `Password check: ... elapsed=... ms` and `Authentication processing and reply: elapsed=... ms` without logging credentials. Measure on your board: host benchmarks do not establish an ESP32 login time.
 
-Version 0.4.1 fixed startup linking so Arduino retains Bluetooth memory before `setup()` runs; this fix remains included, with the three-client default. Build and upload this project to update an existing board; replacing files alone does not update the firmware. After reset, the serial monitor prints `firmware 0.6.1` and, on successful Bluetooth startup, `READY Bluetooth`. If startup fails, copy the preceding named step, error code and heap information. The older generic “original ESP32 Classic required” runtime message did not establish that your board was incompatible.
+Version 0.4.1 fixed startup linking so Arduino retains Bluetooth memory before `setup()` runs; this fix remains included, with the three-client default. Build and upload this project to update an existing board; replacing files alone does not update the firmware. After reset, the serial monitor prints `firmware 0.6.2` and, on successful Bluetooth startup, `READY Bluetooth`. If startup fails, copy the preceding named step, error code and heap information. The older generic “original ESP32 Classic required” runtime message did not establish that your board was incompatible.
 
 Install VS Code with the PlatformIO extension, then open this `esp32` folder as a PlatformIO project. Alternatively install PlatformIO Core 6.1.18 and run from the repository root:
 

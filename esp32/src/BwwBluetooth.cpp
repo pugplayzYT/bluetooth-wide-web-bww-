@@ -81,6 +81,7 @@ void BwwBluetooth::sppCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t* par
     }
     case ESP_SPP_DATA_IND_EVT: {
         int index = self->clients_.find(param->data_ind.handle); if (index < 0) break;
+        if (param->data_ind.len && self->activity_) self->activity_();
         // A hex-encoded 8 KiB chunk exceeds the 4 KiB queue. Give the main
         // task time to spool bytes to SD instead of disconnecting on a normal
         // burst. Waiting yields this task; SD is still accessed only by main.
@@ -100,6 +101,7 @@ void BwwBluetooth::sppCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t* par
     }
     case ESP_SPP_WRITE_EVT: {
         int index = self->clients_.find(param->write.handle); if (index < 0) break;
+        if (param->write.status == ESP_SPP_SUCCESS && self->activity_) self->activity_();
         auto events = self->buffers_[index].transmit;
         if (param->write.cong) xEventGroupClearBits(events, CAN_SEND); else xEventGroupSetBits(events, CAN_SEND);
         xEventGroupSetBits(events, param->write.status == ESP_SPP_SUCCESS ? SENT : FAILED); break;
@@ -163,6 +165,7 @@ bool BwwBluetooth::write(size_t index, uint32_t handle, const uint8_t* bytes, si
         if (!(ready & CAN_SEND) || (ready & FAILED) || !connected(index, handle)) { disconnect(index, handle); return false; }
         xEventGroupClearBits(buffers_[index].transmit, SENT | FAILED);
         if (esp_spp_write(handle, chunk, const_cast<uint8_t*>(bytes)) != ESP_OK) { disconnect(index, handle); return false; }
+        if (activity_) activity_();
         auto result = wait(index, handle, SENT | FAILED, true);
         if (!(result & SENT) || (result & FAILED) || !connected(index, handle)) { disconnect(index, handle); return false; }
         bytes += chunk; size -= chunk;

@@ -18,6 +18,7 @@ public:
     bool write(size_t index, uint32_t handle, const uint8_t* bytes, size_t size);
     void disconnect(size_t index, uint32_t handle);
     void setCooperate(void (*callback)()) { cooperate_ = callback; }
+    void setActivity(void (*callback)()) { activity_ = callback; }
     void handlePairing();
 private:
     static BwwBluetooth* instance_;
@@ -27,6 +28,7 @@ private:
     Client buffers_[bww::MAX_BT_CLIENTS];
     bww::ClientSlots clients_;
     void (*cooperate_)() = nullptr;
+    void (*activity_)() = nullptr;
     EventBits_t wait(size_t index, uint32_t handle, EventBits_t bits, bool clear);
     std::atomic<bool> pairingPending_{false};
     volatile uint32_t pairingAt_ = 0;
