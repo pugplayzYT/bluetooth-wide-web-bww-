@@ -21,9 +21,11 @@ Vin is commonly approximately 5 V on a USB-powered development board. A bare SD 
 
 ## Build, flash, and pair
 
-[Download the ESP32-only PlatformIO project (version 0.4.1)](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/raw/refs/heads/main/downloads/Bww-ESP32-PlatformIO-0.4.1.zip). Extract the ZIP, then open its `esp32` folder in VS Code. This download contains the firmware source and configuration; host-side tests require the full repository.
+[Download the ESP32-only PlatformIO project (version 0.4.2)](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/raw/refs/heads/main/downloads/Bww-ESP32-PlatformIO-0.4.2.zip). Extract the ZIP, then open its `esp32` folder in VS Code. This download contains the firmware source and configuration; host-side tests require the full repository.
 
-Version 0.4.1 fixes startup linking so Arduino retains Bluetooth memory before `setup()` runs. It retains the three-client default. Build and upload this project to update an existing board; replacing files alone does not update the firmware. After reset, the serial monitor prints `firmware 0.4.1` and, on successful Bluetooth startup, `READY Bluetooth`. If startup fails, copy the preceding named step, error code and heap information. The older generic “original ESP32 Classic required” runtime message did not establish that your board was incompatible.
+Version 0.4.2 speeds password hashing by preparing the HMAC key states once per login/signup and yielding by elapsed time. It preserves PBKDF2-SHA256's 210,000 iterations and the existing account format; no account migration is needed. Serial reports `Password check: ... elapsed=... ms` and `Authentication processing and reply: elapsed=... ms` without logging credentials. Measure on your board: host benchmarks do not establish an ESP32 login time.
+
+Version 0.4.1 fixed startup linking so Arduino retains Bluetooth memory before `setup()` runs; this fix remains included, with the three-client default. Build and upload this project to update an existing board; replacing files alone does not update the firmware. After reset, the serial monitor prints `firmware 0.4.2` and, on successful Bluetooth startup, `READY Bluetooth`. If startup fails, copy the preceding named step, error code and heap information. The older generic “original ESP32 Classic required” runtime message did not establish that your board was incompatible.
 
 Install VS Code with the PlatformIO extension, then open this `esp32` folder as a PlatformIO project. Alternatively install PlatformIO Core 6.1.18 and run from the repository root:
 
@@ -74,13 +76,13 @@ Persisted credentials contain salted password hashes and session-token digests; 
 
 Edit `include/BwwConfig.h` to change SD pins and limits (`MAX_BT_CLIENTS = 3`, `MAX_SITE_BYTES = 512 * 1024`). Pin changes also require rewiring; larger JSON limits consume ESP32 heap and must be tested on hardware. `src/BwwCore.cpp` and `src/BwwTransfers.cpp` implement the same operations documented in [../PROTOCOL.md](../PROTOCOL.md). `src/main.cpp` adapts SD storage and mbedTLS crypto; `src/BwwBluetooth.cpp` provides secure Classic SPP, numeric pairing confirmation, bounded receiving, and congestion-aware replies. The desktop and SD storage formats are intentionally separate; copying desktop `store.json` to the card is not an import. Use [BWW SD Copy](../BWW_SD_COPY_README.md) to convert computer accounts/sites onto an already FAT32 card, or copy SD sites back to a computer.
 
-After installing PlatformIO dependencies, Linux developers can test the actual portable C++ core using g++ and OpenSSL development headers:
+After installing PlatformIO dependencies, Linux developers can test the actual portable C++ core and prepared password HMAC using g++, OpenSSL and Mbed TLS 2.x development headers (Ubuntu: `sudo apt-get install g++ libssl-dev libmbedtls-dev`):
 
 ```sh
 python3 scripts/test_firmware.py
 ```
 
-Run that command from the repository root. It tests account operations/ownership, quotas, persisted sessions/sites, powered-time expiration, interrupted writes, corrupt snapshots/site content, framing, and PBKDF2 compatibility with OpenSSL. This uses temporary directories and does not touch your card. It does not exercise the ESP-IDF Bluetooth stack or SD electrical behavior.
+Run that command from the repository root. Alternatively pass `--mbedtls-source /path/to/mbedtls-2.x` to build the password tests against an existing source tree. It tests account operations/ownership, quotas, persisted sessions/sites, powered-time expiration, interrupted writes, corrupt snapshots/site content, framing, and PBKDF2 compatibility with OpenSSL, including long and Unicode passwords and timed cooperation at clock rollover. This uses temporary directories and does not touch your card. It does not exercise the ESP-IDF Bluetooth stack or SD electrical behavior.
 
 Before relying on hardware, build and flash it, verify the reported flash/RAM usage, then pair a phone, register, publish near the 512 KiB limit, reconnect and reboot, and verify the saved site/session. Test rejected pairing, three phones browsing/publishing at once, a fourth rejected while all slots are occupied, missing/invalid SD cards, and scores retained in the Android app. Check Serial for mount/pairing errors without logging account secrets.
 

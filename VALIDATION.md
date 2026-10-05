@@ -1,4 +1,12 @@
-# Validation of version 0.4.0
+# Validation
+
+## Firmware 0.4.2 password-hashing optimization
+
+The production `PasswordHmac.h` passed 56 HMAC comparisons and eight full 210,000-round PBKDF2 comparisons against OpenSSL using real Mbed TLS 2.28.9. Cases include empty input, 63/64/65/256-byte keys, Unicode and embedded NULs; existing PBKDF2 output remains unchanged. The timed cooperation schedule passed its boundary and millisecond-rollover checks. A host-only comparison on the same software SHA backend measured 260 ms with repeated key pads and 135 ms with prepared states; this is not an ESP32 measurement.
+
+An additional host check compiled Espressif's ESP-IDF 4.4.7 parallel-engine SHA driver and alternate context header against an emulated SHA engine backed by OpenSSL. The same vectors passed through the driver's hardware-to-software cloning path, including lock/unlock assertions. This checks the context transition, not ESP32 hardware performance. Sources: [Espressif SHA driver](https://github.com/espressif/esp-idf/blob/v4.4.7/components/mbedtls/port/sha/parallel_engine/esp_sha256.c), [alternate context](https://github.com/espressif/esp-idf/blob/v4.4.7/components/mbedtls/port/include/sha256_alt.h).
+
+All 16 portable firmware integration tests and all 12 SD-copy compatibility tests passed, none skipped; Bluetooth startup, PBKDF2 and client-slot checks also passed. Physical-board login/signup duration, concurrent Bluetooth throughput and target cross-build remain unverified here. Firmware prints password-hash and authentication-processing/reply durations to enable real-board measurement without logging usernames, passwords or tokens. The PlatformIO download restriction described below remains.
 
 ## Firmware 0.4.1 startup fix
 

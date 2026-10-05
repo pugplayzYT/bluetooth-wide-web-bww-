@@ -2,12 +2,12 @@
 #include <SPI.h>
 #include <SD.h>
 #include <esp_system.h>
-#include <mbedtls/md.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/sha256.h>
 #include "BwwCore.h"
 #include "BwwBluetooth.h"
 #include "RequestFrame.h"
+#include "PasswordHmac.h"
 using namespace bww;
 void pumpNetwork();
 class SdStorage : public Storage {
@@ -68,14 +68,14 @@ public:
     }
     std::string passwordHash(const std::string& password, const std::string& saltHex) override {
         std::vector<uint8_t> salt; if (!unhex(saltHex, salt) || salt.size() != 16) return "";
-        mbedtls_md_context_t context; mbedtls_md_init(&context);
-        const auto* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-        bool ok = info && mbedtls_md_setup(&context, info, 1) == 0 && mbedtls_md_hmac_starts(&context, reinterpret_cast<const uint8_t*>(password.data()), password.size()) == 0;
-        auto hmac = [&](const uint8_t* data, size_t size, uint8_t out[32]) {
-            return mbedtls_md_hmac_reset(&context) == 0 && mbedtls_md_hmac_update(&context, data, size) == 0 && mbedtls_md_hmac_finish(&context, out) == 0;
-        };
-        uint8_t digest[32]; ok = ok && pbkdf2(salt, hmac, [] { pumpNetwork(); delay(1); }, digest);
-        mbedtls_md_free(&context); return ok ? hex(digest, 32) : "";
+        uint32_t started = millis(); PasswordCooperation cooperation(started);
+        PasswordHmac hmac(password);
+        uint8_t digest[32];
+        bool ok = pbkdf2(salt, [&](const uint8_t* data, size_t size, uint8_t out[32]) { return hmac(data, size, out); },
+            [&] { if (cooperation.due(millis())) { pumpNetwork(); delay(1); } }, digest);
+        Serial.printf("Password check: iterations=%lu, elapsed=%lu ms, result=%s\n",
+            static_cast<unsigned long>(PASSWORD_ITERATIONS), static_cast<unsigned long>(millis() - started), ok ? "complete" : "failed");
+        return ok ? hex(digest, 32) : "";
     }
 };
 class ReplyWriter {
@@ -171,10 +171,13 @@ void loop() {
         pending.ready = false; pending.bytes = 0; pending.started = 0;
         if (!frame.complete() || frame.tooLarge) { bluetooth.disconnect(index, handle); rpc.clear(); }
         else {
+            bool authentication = rpc["op"] == "login" || rpc["op"] == "register";
+            uint32_t requestStarted = millis();
             if (result || !clean) failure(rpc, result == DeserializationError::NoMemory ? "too_large" : "invalid_json", "Invalid or oversized JSON request");
             else core.execute(rpc);
             ReplyWriter output(bluetooth, index, handle); serializeJson(rpc, output); output.write('\n'); output.flush();
             rpc.clear(); if (!output.good) bluetooth.disconnect(index, handle);
+            if (authentication) Serial.printf("Authentication processing and reply: elapsed=%lu ms\n", static_cast<unsigned long>(millis() - requestStarted));
         }
         nextClient = (index + 1) % MAX_BT_CLIENTS; break;
     }
