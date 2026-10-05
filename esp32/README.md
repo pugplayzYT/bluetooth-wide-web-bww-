@@ -21,6 +21,8 @@ Vin is commonly approximately 5 V on a USB-powered development board. A bare SD 
 
 ## Build, flash, and pair
 
+[Download the ESP32-only PlatformIO project (version 0.4.0)](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/raw/refs/heads/main/downloads/Bww-ESP32-PlatformIO-0.4.0.zip). Extract the ZIP, then open its `esp32` folder in VS Code. This download contains the firmware source and configuration; host-side tests require the full repository.
+
 Install VS Code with the PlatformIO extension, then open this `esp32` folder as a PlatformIO project. Alternatively install PlatformIO Core 6.1.18 and run from the repository root:
 
 ```sh
