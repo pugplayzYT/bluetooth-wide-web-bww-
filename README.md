@@ -1,5 +1,12 @@
 # Bluetooth-wide Web (BWW)
 
+[![Build and test](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/actions/workflows/build.yml)
+[![Android 8+](https://img.shields.io/badge/Android-8%2B-3DDC84?logo=android&logoColor=white)](#use-the-built-app)
+[![ESP32 · PlatformIO](https://img.shields.io/badge/ESP32-PlatformIO-FF7F00?logo=platformio&logoColor=white)](esp32/README.md)
+[![Windows 10 / 11](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4)](SYNC_README.md)
+[![Bluetooth Classic · RFCOMM](https://img.shields.io/badge/Bluetooth-Classic%20RFCOMM-0082FC?logo=bluetooth&logoColor=white)](PROTOCOL.md)
+[![Downloads](https://img.shields.io/badge/Download-Apps%20%26%20firmware-8B5CF6?logo=github&logoColor=white)](downloads/)
+
 Publish a small HTML/CSS/JavaScript site on your computer and browse it from a paired Android phone, using Bluetooth Classic RFCOMM. No Wi-Fi or Internet is needed while using the app.
 
 The project includes a Windows console server, a standalone ESP32 + SD card host, and a native Android browser/editor. See [the ESP32 setup and wiring guide](esp32/README.md) for the PlatformIO C++ firmware and your GPIO5/18/23/19 wiring. The server is the authority for accounts and domains. `bww://garden.bww` is unique **on that computer**, not globally across every Bluetooth server. Connect to another computer to explore its sites; accounts and sessions are separate on each computer.
