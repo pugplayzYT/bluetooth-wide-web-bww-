@@ -1,5 +1,5 @@
-"""Compile the actual Bluetooth adapter against a fake SDK; test static HAL linking
-and stop-at-failure diagnostics. This does not emulate Bluetooth hardware."""
+"""Compile the actual Bluetooth adapter against a fake SDK; test HAL linking,
+startup failures and bounded receive bursts. This does not emulate Bluetooth hardware."""
 import argparse
 from pathlib import Path
 import subprocess
@@ -82,17 +82,50 @@ MOCK = r'''
 #include <vector>
 #include <iostream>
 #include <cstdlib>
+#include <deque>
 SerialPort Serial;
 std::string fail, logs;
 std::vector<std::string> calls;
 void(*spp)(esp_spp_cb_event_t,esp_spp_cb_param_t*)=nullptr;
+struct Queue { unsigned capacity; std::deque<uint8_t> bytes; };
+BwwBluetooth* reader=nullptr;
+bool draining=true;
+unsigned waits=0;
+uint32_t clockNow=0, waitCost=1;
+std::vector<unsigned> waitBudgets;
+std::vector<uint32_t> disconnected;
+std::vector<uint8_t> received[3];
+void ensure(bool);
+void drainReceivers(){
+    for(size_t slot=0;slot<3;++slot) for(unsigned n=0;n<512;++n){
+        int byte=reader->read(slot,reader->clientHandle(slot));
+        if(byte<0)break;
+        received[slot].push_back(static_cast<uint8_t>(byte));
+    }
+}
 void SerialPort::println(const char* s){logs+=s; logs+='\n';}
 void SerialPort::printf(const char* format,...){char buffer[512];va_list args;va_start(args,format);vsnprintf(buffer,sizeof(buffer),format,args);va_end(args);logs+=buffer;}
 int SerialPort::available(){return 0;} int SerialPort::read(){return -1;}
-void pinMode(int,int){} int digitalRead(int){return 1;} uint32_t millis(){return 0;}
-QueueHandle_t xQueueCreate(unsigned,size_t){return fail=="client queue/event allocation"?nullptr:reinterpret_cast<void*>(1);}
-void xQueueReset(QueueHandle_t){} int xQueueSend(QueueHandle_t,const void*,unsigned){return pdTRUE;}
-int xQueueReceive(QueueHandle_t,void*,unsigned){return pdFALSE;} unsigned uxQueueMessagesWaiting(QueueHandle_t){return 0;}
+void pinMode(int,int){} int digitalRead(int){return 1;} uint32_t millis(){return clockNow;}
+QueueHandle_t xQueueCreate(unsigned capacity,size_t){return fail=="client queue/event allocation"?nullptr:new Queue{capacity,{}};}
+void xQueueReset(QueueHandle_t q){static_cast<Queue*>(q)->bytes.clear();}
+int xQueueSend(QueueHandle_t q,const void* data,unsigned timeout){
+    auto& queue=*static_cast<Queue*>(q);
+    if(queue.bytes.size()==queue.capacity){
+        if(!timeout)return pdFALSE;
+        ensure(timeout<=2000);++waits;waitBudgets.push_back(timeout);
+        clockNow+=waitCost<timeout?waitCost:timeout;
+        if(draining && waitCost<=timeout)drainReceivers();
+        if(queue.bytes.size()==queue.capacity)return pdFALSE;
+    }
+    queue.bytes.push_back(*static_cast<const uint8_t*>(data));return pdTRUE;
+}
+int xQueueReceive(QueueHandle_t q,void* out,unsigned){
+    auto& bytes=static_cast<Queue*>(q)->bytes;
+    if(bytes.empty())return pdFALSE;
+    *static_cast<uint8_t*>(out)=bytes.front();bytes.pop_front();return pdTRUE;
+}
+unsigned uxQueueMessagesWaiting(QueueHandle_t q){return static_cast<Queue*>(q)->bytes.size();}
 EventGroupHandle_t xEventGroupCreate(){return reinterpret_cast<void*>(2);}
 void xEventGroupClearBits(EventGroupHandle_t,EventBits_t){} void xEventGroupSetBits(EventGroupHandle_t,EventBits_t){}
 EventBits_t xEventGroupWaitBits(EventGroupHandle_t,EventBits_t,int,int,unsigned){return 0;}
@@ -115,7 +148,7 @@ esp_err_t esp_spp_init(int mode){ensure(mode==ESP_SPP_MODE_CB);return step("esp_
 esp_err_t esp_bt_dev_set_device_name(const char* name){ensure(std::string(name)=="BWW-ESP32");return step("esp_bt_dev_set_device_name");}
 esp_err_t esp_bt_gap_set_scan_mode(int,int){return step("esp_bt_gap_set_scan_mode");}
 esp_err_t esp_spp_start_srv(int security,int,int,const char*){ensure(security==(ESP_SPP_SEC_AUTHENTICATE|ESP_SPP_SEC_ENCRYPT));return step("esp_spp_start_srv");}
-esp_err_t esp_spp_disconnect(uint32_t){return ESP_OK;} esp_err_t esp_bt_gap_ssp_confirm_reply(uint8_t*,bool){return ESP_OK;}
+esp_err_t esp_spp_disconnect(uint32_t handle){disconnected.push_back(handle);return ESP_OK;} esp_err_t esp_bt_gap_ssp_confirm_reply(uint8_t*,bool){return ESP_OK;}
 esp_err_t esp_bt_gap_pin_reply(uint8_t*,bool,int,uint8_t*){return ESP_OK;} esp_err_t esp_spp_write(uint32_t,size_t,uint8_t*){return ESP_OK;}
 int main(int argc,char**argv){
     fail=argc>1?argv[1]:"";
@@ -134,7 +167,37 @@ int main(int argc,char**argv){
         ensure(logs.find(fail=="client queue/event allocation"?"ESP_ERR_NO_MEM":"ESP_ERR_INVALID_STATE")!=std::string::npos);
         ensure(logs.find("Free heap=")!=std::string::npos);
         if(fail!="client queue/event allocation")ensure(calls.back()==fail);
-    }else ensure(calls.size()==12);
+    }else {
+        ensure(calls.size()==12);reader=&bluetooth;
+        std::vector<uint8_t> expected[3];
+        for(size_t slot=0;slot<3;++slot){
+            esp_spp_cb_param_t event;event.srv_open.status=ESP_SPP_SUCCESS;event.srv_open.handle=31+slot;
+            spp(ESP_SPP_SRV_OPEN_EVT,&event);
+            for(unsigned n=0;n<16480;++n)expected[slot].push_back(static_cast<uint8_t>(n+slot*71));
+        }
+        // Interleave complete upload-size bursts into bounded queues. The fake
+        // main task drains bytes only when a blocking send yields to it.
+        for(unsigned part=0;part<2;++part)for(size_t slot=0;slot<3;++slot){
+            esp_spp_cb_param_t event;event.data_ind.handle=31+slot;
+            event.data_ind.data=expected[slot].data()+part*8240;event.data_ind.len=8240;
+            spp(ESP_SPP_DATA_IND_EVT,&event);
+        }
+        while(bluetooth.available(0)||bluetooth.available(1)||bluetooth.available(2))drainReceivers();
+        ensure(waits>0 && disconnected.empty());
+        for(size_t slot=0;slot<3;++slot)ensure(received[slot]==expected[slot]);
+        // A genuinely stalled reader still fails boundedly, only on its client.
+        draining=false;esp_spp_cb_param_t event;event.data_ind.handle=32;
+        event.data_ind.data=expected[1].data();event.data_ind.len=5000;
+        spp(ESP_SPP_DATA_IND_EVT,&event);
+        ensure(disconnected.size()==1 && disconnected[0]==32);
+        ensure(logs.find("Bluetooth receive stalled")!=std::string::npos);
+        // Slow progress must not reset the total indication deadline per byte.
+        draining=true;waitCost=350;waitBudgets.clear();uint32_t started=clockNow;
+        event.data_ind.handle=33;event.data_ind.data=expected[2].data();event.data_ind.len=16480;
+        spp(ESP_SPP_DATA_IND_EVT,&event);
+        ensure(disconnected.size()==2 && disconnected[1]==33);
+        ensure(clockNow-started==2000 && waitBudgets.front()==2000 && waitBudgets.back()<350);
+    }
     return 0;
 }
 '''
@@ -162,6 +225,6 @@ def main():
                   'esp_bluedroid_init','esp_bluedroid_enable','esp_bt_gap_register_callback','esp_spp_register_callback',
                   'esp_bt_gap_set_security_param','esp_spp_init','esp_bt_dev_set_device_name','esp_bt_gap_set_scan_mode','esp_spp_start_srv']
         for failure in ['']+failures:subprocess.run([executable,failure],check=True)
-        print('Bluetooth startup: HAL retained before setup; secure 3-client startup and 13 failure diagnostics passed (fake SDK).')
+        print('Bluetooth adapter: HAL retained; secure 3-client startup, 13 failure diagnostics, lossless 16 KiB interleaved receive bursts and bounded stalled-reader handling passed (fake SDK).')
 
 if __name__=='__main__':main()

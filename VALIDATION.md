@@ -1,5 +1,11 @@
 # Validation
 
+## Firmware 0.4.3 publish transport fix
+
+The actual Bluetooth adapter passed a host regression harness with bounded fake FreeRTOS queues and a simulated main-task consumer. Three clients each received 16,480 bytes in interleaved bursts through 4 KiB queues, preserving every byte and client isolation without disconnecting. A non-draining consumer disconnected only its client with a diagnostic. A slowly draining consumer exhausted the two-second total indication budget rather than renewing the timeout per byte. The previous 0.4.2 adapter fails the same lossless-burst regression due to its immediate queue-full disconnect. Startup/linking and 13 failure-diagnostic checks also passed. This simulates queue scheduling, not Bluetooth radio, SD or FreeRTOS timing on a physical board.
+
+For this update, all 16 firmware-core integration tests and all 12 SD-copy tests passed, none skipped, along with the password compatibility/cooperation and client-slot checks. The target cross-build is still blocked by the registry access restriction below; actual Android publication, SD stalls and simultaneous Bluetooth clients need physical-board verification.
+
 ## Firmware 0.4.2 password-hashing optimization
 
 The production `PasswordHmac.h` passed 56 HMAC comparisons and eight full 210,000-round PBKDF2 comparisons against OpenSSL using real Mbed TLS 2.28.9. Cases include empty input, 63/64/65/256-byte keys, Unicode and embedded NULs; existing PBKDF2 output remains unchanged. The timed cooperation schedule passed its boundary and millisecond-rollover checks. A host-only comparison on the same software SHA backend measured 260 ms with repeated key pads and 135 ms with prepared states; this is not an ESP32 measurement.

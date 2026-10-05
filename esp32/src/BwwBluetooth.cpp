@@ -17,6 +17,7 @@ static_assert(bww::MAX_BT_CLIENTS <= CONFIG_BT_ACL_CONNECTIONS, "Too many client
 namespace {
 constexpr EventBits_t SENT = 1, FAILED = 2, CAN_SEND = 4;
 constexpr int PAIR_BUTTON = 0;
+constexpr uint32_t RECEIVE_WAIT_MS = 2000;
 bool checked(const char* step, esp_err_t result) {
     if (result == ESP_OK) return true;
     Serial.printf("Bluetooth startup failed at %s: %s (0x%lx). Free heap=%lu, largest internal block=%lu\n",
@@ -80,8 +81,21 @@ void BwwBluetooth::sppCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t* par
     }
     case ESP_SPP_DATA_IND_EVT: {
         int index = self->clients_.find(param->data_ind.handle); if (index < 0) break;
-        for (size_t i = 0; i < param->data_ind.len; ++i)
-            if (xQueueSend(self->buffers_[index].receive, &param->data_ind.data[i], 0) != pdTRUE) { self->disconnect(index, param->data_ind.handle); break; }
+        // A hex-encoded 8 KiB chunk exceeds the 4 KiB queue. Give the main
+        // task time to spool bytes to SD instead of disconnecting on a normal
+        // burst. Waiting yields this task; SD is still accessed only by main.
+        // Bound the entire indication, not each byte, so a stalled reader
+        // cannot hold the Bluetooth callback indefinitely.
+        uint32_t started = millis();
+        for (size_t i = 0; i < param->data_ind.len; ++i) {
+            uint32_t elapsed = millis() - started;
+            uint32_t remaining = elapsed < RECEIVE_WAIT_MS ? RECEIVE_WAIT_MS - elapsed : 0;
+            if (xQueueSend(self->buffers_[index].receive, &param->data_ind.data[i], pdMS_TO_TICKS(remaining)) != pdTRUE) {
+                Serial.printf("Bluetooth receive stalled: client=%d, queued=%u, event bytes=%u; disconnecting after bounded wait\n",
+                    index, static_cast<unsigned>(uxQueueMessagesWaiting(self->buffers_[index].receive)), static_cast<unsigned>(param->data_ind.len));
+                self->disconnect(index, param->data_ind.handle); break;
+            }
+        }
         break;
     }
     case ESP_SPP_WRITE_EVT: {
