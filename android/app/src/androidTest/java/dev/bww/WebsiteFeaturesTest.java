@@ -2,6 +2,7 @@ package dev.bww;
 
 import android.os.SystemClock;
 import android.view.View;
+import android.view.MotionEvent;
 import android.webkit.WebView;
 import android.widget.FrameLayout;
 import androidx.test.core.app.ActivityScenario;
@@ -68,7 +69,17 @@ public class WebsiteFeaturesTest {
             assertEquals("null", js(scenario, "localStorage.getItem('" + SCORE_KEY + "')"));
         }
     }
-    @Test public void fullscreenKeepsThePageAndExitsWithButtonOrBack() throws Exception {
+    private void doubleTap(MainActivity activity) {
+        long start = SystemClock.uptimeMillis();
+        for (int tap = 0; tap < 2; ++tap) {
+            for (int action : new int[]{MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP}) {
+                MotionEvent event = MotionEvent.obtain(start + tap * 100, start + tap * 100 + (action == MotionEvent.ACTION_UP ? 40 : 0), action, 100, 100, 0);
+                activity.dispatchTouchEvent(event); event.recycle();
+            }
+            if (tap == 0) assertEquals(View.GONE, activity.findViewById(R.id.browser_controls).getVisibility());
+        }
+    }
+    @Test public void fullscreenKeepsThePageAndExitsWithDoubleTapOrBack() throws Exception {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             loadSite(scenario, COMPUTER, "fullscreen");
             js(scenario, "window.testMarker = 'still-playing'; localStorage.setItem('" + SCORE_KEY + "','7')");
@@ -77,14 +88,12 @@ public class WebsiteFeaturesTest {
                 original.set(activity.findViewById(R.id.site_webview));
                 activity.findViewById(R.id.full_screen).performClick();
                 assertEquals(View.GONE, activity.findViewById(R.id.browser_controls).getVisibility());
-                assertEquals(View.VISIBLE, activity.findViewById(R.id.exit_full_screen).getVisibility());
-                activity.findViewById(R.id.exit_full_screen).performClick();
+                doubleTap(activity);
                 assertEquals(View.VISIBLE, activity.findViewById(R.id.browser_controls).getVisibility());
                 assertSame(original.get(), activity.findViewById(R.id.site_webview));
                 activity.findViewById(R.id.full_screen).performClick();
                 activity.onBackPressed();
                 assertEquals(View.VISIBLE, activity.findViewById(R.id.browser_controls).getVisibility());
-                assertEquals(View.GONE, activity.findViewById(R.id.exit_full_screen).getVisibility());
             });
             assertEquals("\"still-playing\"", js(scenario, "window.testMarker"));
             assertEquals("\"7\"", js(scenario, "localStorage.getItem('" + SCORE_KEY + "')"));
@@ -96,8 +105,7 @@ public class WebsiteFeaturesTest {
                 WebView web = activity.findViewById(R.id.site_webview); AtomicInteger hidden = new AtomicInteger();
                 web.getWebChromeClient().onShowCustomView(new FrameLayout(activity), hidden::incrementAndGet);
                 assertEquals(View.GONE, web.getVisibility());
-                assertEquals(View.VISIBLE, activity.findViewById(R.id.exit_full_screen).getVisibility());
-                activity.onBackPressed();
+                doubleTap(activity);
                 assertEquals(View.VISIBLE, web.getVisibility());
                 assertEquals(View.VISIBLE, activity.findViewById(R.id.browser_controls).getVisibility());
                 assertEquals(1, hidden.get());

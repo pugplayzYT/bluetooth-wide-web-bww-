@@ -29,7 +29,9 @@ public class MainActivity extends Activity {
     private WebView web;
     private LinearLayout root, chrome;
     private FrameLayout website;
-    private Button exitFullScreen;
+    private GestureDetector fullScreenGesture;
+    private Toast fullScreenHint;
+    private boolean consumeExitTouch;
     private View customView;
     private WebChromeClient.CustomViewCallback customViewCallback;
     private boolean fullScreen, customWasFullScreen;
@@ -39,6 +41,12 @@ public class MainActivity extends Activity {
     interface Job { void run() throws Exception; }
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        fullScreenGesture = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override public boolean onDown(MotionEvent event) { return true; }
+            @Override public boolean onDoubleTap(MotionEvent event) {
+                consumeExitTouch = true; exitFullScreen(); return true;
+            }
+        });
         prefs = getSharedPreferences("bww", MODE_PRIVATE);
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(16), dp(10), dp(16), 0); root.setBackgroundColor(Color.rgb(244,247,245));
@@ -102,10 +110,6 @@ public class MainActivity extends Activity {
         website = new FrameLayout(this); website.addView(web, new FrameLayout.LayoutParams(-1, -1));
         root.addView(website, new LinearLayout.LayoutParams(-1, 0, 1));
         FrameLayout screen = new FrameLayout(this); screen.addView(root, new FrameLayout.LayoutParams(-1, -1));
-        exitFullScreen = button(getString(R.string.exit_full_screen), v -> exitFullScreen());
-        exitFullScreen.setId(R.id.exit_full_screen); exitFullScreen.setVisibility(View.GONE);
-        FrameLayout.LayoutParams exitPosition = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
-        exitPosition.setMargins(dp(8), dp(8), dp(8), 0); screen.addView(exitFullScreen, exitPosition);
         setContentView(screen);
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
         web.loadDataWithBaseURL("https://welcome.bww/", "<html><meta name='viewport' content='width=device-width'><body style='font-family:sans-serif;padding:24px;color:#173e35'><h1>Welcome to your nearby web.</h1><p>1. Start BWW on your Windows computer.</p><p>2. Pair your phone with the computer.</p><p>3. Tap Connect and choose it.</p><p>Browse sites, or sign in to publish your own HTML, CSS, and JavaScript.</p></body></html>", "text/html", "UTF-8", null);
@@ -342,9 +346,15 @@ public class MainActivity extends Activity {
         root.setPadding(fullScreen ? 0 : dp(16), fullScreen ? 0 : dp(10) + topInset, fullScreen ? 0 : dp(16), fullScreen ? 0 : bottomInset);
     }
     private void setFullScreen(boolean enabled) {
+        boolean entering = enabled && !fullScreen;
         fullScreen = enabled;
         chrome.setVisibility(enabled ? View.GONE : View.VISIBLE);
-        exitFullScreen.setVisibility(enabled ? View.VISIBLE : View.GONE);
+        if (entering) {
+            MotionEvent reset = MotionEvent.obtain(SystemClock.uptimeMillis(), SystemClock.uptimeMillis(), MotionEvent.ACTION_CANCEL, 0, 0, 0);
+            fullScreenGesture.onTouchEvent(reset); reset.recycle();
+            if (fullScreenHint != null) fullScreenHint.cancel();
+            fullScreenHint = Toast.makeText(this, R.string.full_screen_hint, Toast.LENGTH_LONG); fullScreenHint.show();
+        } else if (!enabled && fullScreenHint != null) fullScreenHint.cancel();
         updateBrowserPadding(); applySystemBars();
         root.requestApplyInsets();
     }
@@ -371,6 +381,17 @@ public class MainActivity extends Activity {
         callback.onCustomViewHidden();
     }
     private void exitFullScreen() { hideCustomView(); setFullScreen(false); }
+    @Override public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) consumeExitTouch = false;
+        // Observe without consuming normal page taps, scrolling or video controls.
+        // Consume the second tap only when it triggers the native full-screen exit.
+        if (fullScreen) fullScreenGesture.onTouchEvent(event);
+        if (consumeExitTouch) {
+            if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) consumeExitTouch = false;
+            return true;
+        }
+        return super.dispatchTouchEvent(event);
+    }
     @Override public void onWindowFocusChanged(boolean focused) { super.onWindowFocusChanged(focused); if (focused && fullScreen) applySystemBars(); }
-    @Override public void onDestroy() { hideCustomView(); connection.close(); worker.shutdownNow(); web.destroy(); super.onDestroy(); }
+    @Override public void onDestroy() { hideCustomView(); if (fullScreenHint != null) fullScreenHint.cancel(); connection.close(); worker.shutdownNow(); web.destroy(); super.onDestroy(); }
 }

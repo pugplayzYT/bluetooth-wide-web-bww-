@@ -1,5 +1,9 @@
 # Validation
 
+## Android 0.4.2 full-screen exit gesture
+
+The persistent exit button is removed. Entry shows an automatically disappearing hint, and the activity observes double taps/clicks to exit both browser and HTML custom full-screen views. Single taps and scrolling are dispatched to the existing page; Back remains an exit path. Updated instrumented tests check that a single tap stays full screen, a double tap restores the browser/page instance, Back works, and custom-view exit callbacks run. No device/emulator is available here, so those tests are compiled, not executed. APK build passed, all 20 existing JVM tests passed with no failures/errors/skips, lint passed with only the previously reviewed JavaScript warning, and the development APK's v2 signature verified.
+
 ## Bluetooth account website sync 0.5.0
 
 The PC Release build passed with zero warnings/errors, and the Windows x64 self-contained single-file publish produced a PE32+ executable. Six real PC wire-protocol scenarios passed, including authenticated fingerprints and conditional publication. Seven end-to-end sync scenarios passed using the actual C# sync console/client against the actual portable C++ firmware core over a loopback bridge: preview/cancellation, PC → ESP and repeat/no-op, ESP → PC with backups/credential preservation, a full 512 KiB Unicode round trip, source edits after comparison, destination edits before commit, ownership conflicts, authenticated manifests, chunk corruption, and equivalent content stored with different chunk segmentation. No tests in those suites were skipped.

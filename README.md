@@ -12,7 +12,7 @@ For Bluetooth sync without removing the SD card, [download the Windows sync tool
 
 ## Use the built app
 
-[Download Android app 0.4.1](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Android-0.4.1.apk). This development APK adds a loading spinner for sign-in and registration. When the paired Bluetooth name starts with `BWW-ESP32`, it explains that secure password checking can take 10–20 seconds or longer on the board's small processor. Other hosts show a general waiting message. This app update works with the existing firmware; it does not require reflashing the ESP32. Buttons are disabled during authentication and restored on failure so a request cannot accidentally be submitted twice.
+[Download Android app 0.4.2](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Android-0.4.2.apk). This development APK replaces the full-screen exit button with a temporary hint and double-tap/double-click exit gesture. It also includes the loading spinner for sign-in and registration. When the paired Bluetooth name starts with `BWW-ESP32`, it explains that secure password checking can take 10–20 seconds or longer on the board's small processor. Other hosts show a general waiting message. This app update works with the existing firmware; it does not require reflashing the ESP32. Buttons are disabled during authentication and restored on failure so a request cannot accidentally be submitted twice.
 
 Build outputs in this workspace:
 
@@ -29,7 +29,7 @@ Build outputs in this workspace:
 
 The server persists accounts, hashed session tokens, and sites in `%LOCALAPPDATA%\Bww\store.json`. Stop the server before backing up that file. To use another storage location, run `./Bww.Server.exe --data C:\path\store.json`. One server process may own a store at a time. Do not delete the store unless you intend to remove all accounts and sites. Sessions remain valid across server restarts; signing out revokes that session.
 
-Tap **Full screen** to hide the app controls and system bars while viewing a website. The page keeps running without a reload. Tap **Exit full screen** or press Android Back to return; Back exits full-screen before navigating away. HTML/video fullscreen requests from WebView also use this view, with an always-available exit button.
+Tap **Full screen** to hide the app controls and system bars while viewing a website. The page keeps running without a reload. A brief “Double click to exit full screen” hint appears each time you enter, then disappears automatically. Double-tap/double-click or press Android Back to return; Back exits full-screen before navigating away. HTML/video fullscreen requests use the same gesture. There is no persistent exit button or disable toggle. Normal single taps and scrolling continue reaching the page.
 
 Editor drafts save locally as you type, separately by server and account. Reopening Create Site or the relevant existing site restores its draft. Publishing removes that draft; Close retains it; Discard draft removes it. A disconnected device can retain a draft, but publishing needs a live connection.
 
@@ -99,7 +99,7 @@ The C# build, protocol integration suite, Windows cross-publish, and Android com
 - Connect a second Android phone, sign in as a different account, and confirm it can browse but cannot claim/update the first account's domain.
 - Disable Bluetooth or walk out of range. Confirm connection errors appear; reconnect, reopen a saved draft, and publish again.
 - Revoke Bluetooth permission and confirm the app asks for it on the next connection attempt.
-- Tap Full screen while playing a game. Confirm the controls and system bars hide, the page keeps running, and both Exit full screen and Android Back restore the browser. Test an HTML/video fullscreen request too.
+- Tap Full screen while playing a game. Confirm the hint disappears, normal single taps/scrolling work, the page keeps running, and both double-tap and Android Back restore the browser. Test an HTML/video fullscreen request too.
 - Use localStorage to save a score, fully close/reopen the app, reconnect, and reopen the same site. Confirm the score remains. Switch to another computer hosting the same domain and confirm its score is separate; return to the first computer and confirm its original score remains.
 
 If Connect fails, verify the server says READY Bluetooth, Windows Bluetooth is enabled, the devices are paired, and the chosen device is the Windows computer. The server uses classic Bluetooth, not BLE; BLE-only adapters are insufficient. Use the console to inspect startup errors. There is no macOS/Linux Bluetooth host implementation enabled in this app.

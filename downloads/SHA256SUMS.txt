@@ -1,4 +1,5 @@
 d2fdaf1f93571b51f829f1e52c5eb0c4bedda6ef91bbe9adf5c99705248ecf98  Bww-Android-0.4.1.apk
+c428c01b6b07b2c98b6aed98c501ef84ba6bf565d1abeb5e7985b211061080eb  Bww-Android-0.4.2.apk
 26e89f0bf2abd6a728369cd85b5b288197fb004e74a4e25be31cac879fa75927  Bww-ESP32-PlatformIO-0.4.0.zip
 f15c84dd361486694827ba6491c4190f57ddd22eae8c9d6531a9cfe5ec38b3e5  Bww-ESP32-PlatformIO-0.4.1.zip
 1b5022fbdd1dd9516c32062e6d0c1982c806d6df9ef4867a088ed48db0177548  Bww-ESP32-PlatformIO-0.4.2.zip
