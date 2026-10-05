@@ -10,6 +10,7 @@ root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--arduinojson', type=Path, default=root / 'esp32/.pio/libdeps/esp32dev/ArduinoJson/src')
 args = parser.parse_args()
+subprocess.run(['python3', str(root / 'tests/test_bt_startup.py')], check=True)
 if not (args.arduinojson / 'ArduinoJson.h').is_file():
     parser.error('ArduinoJson headers missing: run pio run -d esp32, or pass --arduinojson /path/to/ArduinoJson/src')
 with tempfile.TemporaryDirectory(prefix='bww-firmware-tests-') as temporary:

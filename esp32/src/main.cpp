@@ -142,12 +142,12 @@ void pumpNetwork() {
 }
 void setup() {
     Serial.begin(115200); delay(300);
-    Serial.println("Bluetooth-wide Web ESP32: SD CS=5 SCK=18 MOSI=23 MISO=19");
+    Serial.printf("Bluetooth-wide Web ESP32 firmware %s: SD CS=5 SCK=18 MOSI=23 MISO=19\n", FIRMWARE_VERSION);
     SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
     if (rpc.capacity() != RPC_CAPACITY || !SD.begin(SD_CS, SPI, SD_FREQUENCY) || SD.cardType() == CARD_NONE || !core.begin()) {
         Serial.println("SD/storage initialization failed. Check wiring, FAT32, power, and /bww backups. No data is automatically formatted or reset."); return;
     }
-    if (!bluetooth.begin("BWW-ESP32")) { Serial.println("Bluetooth initialization failed: original ESP32 Classic required"); return; }
+    if (!bluetooth.begin("BWW-ESP32")) { Serial.println("Bluetooth startup stopped. See the preceding step/error; restart after correcting it."); return; }
     uint8_t key[32]; esp_fill_random(key, sizeof(key)); mbedtls_aes_init(&spoolCipher);
     int cipherResult = mbedtls_aes_setkey_enc(&spoolCipher, key, 256); memset(key, 0, sizeof(key));
     if (cipherResult != 0) { Serial.println("Request spool encryption initialization failed"); return; }

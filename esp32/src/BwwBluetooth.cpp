@@ -3,6 +3,9 @@
 #include <esp_bt_main.h>
 #include <esp_bt_device.h>
 #include <esp_system.h>
+#include <esp32-hal-bt.h>
+#include <esp_heap_caps.h>
+#include <esp_err.h>
 #if !defined(CONFIG_BT_SPP_ENABLED)
 #error "BWW requires an ORIGINAL ESP32 with Bluetooth Classic SPP, not an ESP32-S3/C3/C6."
 #endif
@@ -11,35 +14,62 @@
 #endif
 static_assert(bww::MAX_BT_CLIENTS <= BTDM_CONTROLLER_BR_EDR_MAX_ACL_CONN_LIMIT, "Too many controller clients");
 static_assert(bww::MAX_BT_CLIENTS <= CONFIG_BT_ACL_CONNECTIONS, "Too many clients for the compiled Bluedroid host");
-namespace { constexpr EventBits_t SENT = 1, FAILED = 2, CAN_SEND = 4; constexpr int PAIR_BUTTON = 0; }
+namespace {
+constexpr EventBits_t SENT = 1, FAILED = 2, CAN_SEND = 4;
+constexpr int PAIR_BUTTON = 0;
+bool checked(const char* step, esp_err_t result) {
+    if (result == ESP_OK) return true;
+    Serial.printf("Bluetooth startup failed at %s: %s (0x%lx). Free heap=%lu, largest internal block=%lu\n",
+        step, esp_err_to_name(result), static_cast<unsigned long>(result),
+        static_cast<unsigned long>(esp_get_free_heap_size()),
+        static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+    return false;
+}
+}
 BwwBluetooth* BwwBluetooth::instance_ = nullptr;
 bool BwwBluetooth::begin(const char* name) {
     instance_ = this; name_ = name;
+    // This reference pulls esp32-hal-bt into Arduino's static link. Its strong
+    // btInUse() overrides initArduino's weak false default BEFORE setup(), so
+    // Arduino does not permanently release all Bluetooth RAM at boot.
+    bool alreadyStarted = btStarted();
+    Serial.printf("Bluetooth startup: controller=%d, free heap=%lu, clients=%u\n",
+        static_cast<int>(esp_bt_controller_get_status()),
+        static_cast<unsigned long>(esp_get_free_heap_size()), static_cast<unsigned>(bww::MAX_BT_CLIENTS));
+    if (alreadyStarted || esp_bt_controller_get_status() != ESP_BT_CONTROLLER_STATUS_IDLE) {
+        checked("controller must be idle before initialization", ESP_ERR_INVALID_STATE); return false;
+    }
     for (auto& client : buffers_) {
         client.receive = xQueueCreate(4096, sizeof(uint8_t)); client.transmit = xEventGroupCreate();
-        if (!client.receive || !client.transmit) return false;
+        if (!client.receive || !client.transmit) { checked("client queue/event allocation", ESP_ERR_NO_MEM); return false; }
     }
     pinMode(PAIR_BUTTON, INPUT_PULLUP);
-    esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
+    if (!checked("release unused BLE memory", esp_bt_controller_mem_release(ESP_BT_MODE_BLE))) return false;
     esp_bt_controller_config_t config = BT_CONTROLLER_INIT_CONFIG_DEFAULT(); config.mode = ESP_BT_MODE_CLASSIC_BT;
     config.bt_max_acl_conn = bww::MAX_BT_CLIENTS;
-    if (esp_bt_controller_init(&config) != ESP_OK || esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT) != ESP_OK || esp_bluedroid_init() != ESP_OK || esp_bluedroid_enable() != ESP_OK) return false;
-    if (esp_bt_gap_register_callback(gapCallback) != ESP_OK || esp_spp_register_callback(sppCallback) != ESP_OK) return false;
+    if (!checked("esp_bt_controller_init", esp_bt_controller_init(&config))) return false;
+    if (!checked("esp_bt_controller_enable", esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT))) return false;
+    if (!checked("esp_bluedroid_init", esp_bluedroid_init())) return false;
+    if (!checked("esp_bluedroid_enable", esp_bluedroid_enable())) return false;
+    if (!checked("esp_bt_gap_register_callback", esp_bt_gap_register_callback(gapCallback))) return false;
+    if (!checked("esp_spp_register_callback", esp_spp_register_callback(sppCallback))) return false;
     uint8_t capability = ESP_BT_IO_CAP_IO;
-    if (esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &capability, sizeof(capability)) != ESP_OK) return false;
-    return esp_spp_init(ESP_SPP_MODE_CB) == ESP_OK;
+    if (!checked("esp_bt_gap_set_security_param", esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &capability, sizeof(capability)))) return false;
+    return checked("esp_spp_init", esp_spp_init(ESP_SPP_MODE_CB));
 }
 void BwwBluetooth::sppCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t* param) {
     auto* self = instance_; if (!self) return;
     switch (event) {
     case ESP_SPP_INIT_EVT:
-        if (param->init.status != ESP_SPP_SUCCESS) { Serial.println("Bluetooth initialization failed"); break; }
-        esp_bt_dev_set_device_name(self->name_);
-        esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-        if (esp_spp_start_srv(ESP_SPP_SEC_AUTHENTICATE | ESP_SPP_SEC_ENCRYPT, ESP_SPP_ROLE_SLAVE, 0, "Bluetooth-wide Web") != ESP_OK) Serial.println("Could not start secure Bluetooth SPP server");
+        if (param->init.status != ESP_SPP_SUCCESS) { Serial.printf("Bluetooth SPP initialization event failed: status=%d\n", static_cast<int>(param->init.status)); break; }
+        if (!checked("esp_bt_dev_set_device_name", esp_bt_dev_set_device_name(self->name_))) break;
+        if (!checked("esp_bt_gap_set_scan_mode", esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE))) break;
+        checked("esp_spp_start_srv", esp_spp_start_srv(ESP_SPP_SEC_AUTHENTICATE | ESP_SPP_SEC_ENCRYPT, ESP_SPP_ROLE_SLAVE, 0, "Bluetooth-wide Web"));
         break;
     case ESP_SPP_START_EVT:
-        Serial.println(param->start.status == ESP_SPP_SUCCESS ? "READY Bluetooth: pair with BWW-ESP32 in Android settings" : "Bluetooth SPP listener failed"); break;
+        if (param->start.status == ESP_SPP_SUCCESS) Serial.println("READY Bluetooth: pair with BWW-ESP32 in Android settings");
+        else Serial.printf("Bluetooth SPP listener event failed: status=%d\n", static_cast<int>(param->start.status));
+        break;
     case ESP_SPP_SRV_OPEN_EVT: {
         if (param->srv_open.status != ESP_SPP_SUCCESS) break;
         int index = self->clients_.add(param->srv_open.handle);

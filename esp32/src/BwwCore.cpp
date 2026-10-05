@@ -189,7 +189,7 @@ void Core::execute(JsonDocument& rpc) {
     if (op == "hello") {
         auto d = success(rpc); d["protocol"] = 1; d["name"] = "Bluetooth-wide Web ESP32"; d["maxSiteBytes"] = MAX_SITE_BYTES;
         d["maxBtClients"] = MAX_BT_CLIENTS; d["siteTransfer"] = "chunk-v1"; d["chunkBytes"] = CHUNK_BYTES;
-        d["maxUsers"] = MAX_USERS; d["maxSites"] = MAX_SITES; d["sessionClock"] = "powered-time"; return;
+        d["firmwareVersion"] = FIRMWARE_VERSION; d["maxUsers"] = MAX_USERS; d["maxSites"] = MAX_SITES; d["sessionClock"] = "powered-time"; return;
     }
     if (op == "register" || op == "login") {
         std::string name, password;

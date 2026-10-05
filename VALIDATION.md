@@ -1,5 +1,13 @@
 # Validation of version 0.4.0
 
+## Firmware 0.4.1 startup fix
+
+The actual Bluetooth adapter source passed a host regression harness with a fake ESP-IDF SDK: Arduino's HAL archive is retained before `setup()`, the controller requests Classic Bluetooth with three clients, the listener requires authentication/encryption, and 13 injected startup failures produce specific diagnostics. The harness uses static archives, LTO and section garbage collection to exercise the weak/strong `btInUse()` link. The previous adapter fails the same test because Arduino's weak default reports Bluetooth unused. This is a link/startup regression check, not a real ESP32 cross-build or Bluetooth device test.
+
+For this firmware update, all 16 portable firmware integration tests and all 12 SD-copy compatibility tests passed, none skipped; the PBKDF2 and client-slot checks also passed. The PlatformIO registry restriction below still prevents a cloud target build; cold boot, pairing and three-client transfers require physical-board validation after reflashing.
+
+## Existing application validation
+
 Verified in the Linux cloud workspace:
 
 | Check | Result |
