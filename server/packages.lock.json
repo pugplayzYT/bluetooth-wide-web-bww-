@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0": {
+      "InTheHand.Net.Bluetooth": {
+        "type": "Direct",
+        "requested": "[4.1.44, )",
+        "resolved": "4.1.44",
+        "contentHash": "gRPCmVpYklhn/JkiJpoV2ZExw740csai+o+IgsUn/4igeMOO848uUIXTaN8UDSMGj69T9ZeLYCTYF/dHaJnteg==",
+        "dependencies": {
+          "Linux.Bluetooth": "5.66.0"
+        }
+      },
+      "Linux.Bluetooth": {
+        "type": "Transitive",
+        "resolved": "5.66.0",
+        "contentHash": "psisT3X/CjSGdKCHLb2IzcYGFSCp8q/yZKJLp0X8Fzaeb0MQHkHURpzltBsDOXbuABZ2qWW1i3oaqfkCfTPxwg==",
+        "dependencies": {
+          "Tmds.DBus": "0.15.0"
+        }
+      },
+      "Tmds.DBus": {
+        "type": "Transitive",
+        "resolved": "0.15.0",
+        "contentHash": "11BxHGh+8hwXNdcavX7BxNW5Qr6AC36ABYDcqvZ3bDS7alXI+O95/x0ExoVWWWxjAVTnvmDRtW1Nd3uObPIsVg=="
+      }
+    }
+  }
+}

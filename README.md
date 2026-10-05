@@ -1,0 +1,78 @@
+# Bluetooth-wide Web (BWW)
+
+Publish a small HTML/CSS/JavaScript site on your computer and browse it from a paired Android phone, using Bluetooth Classic RFCOMM. No Wi-Fi or Internet is needed while using the app.
+
+This is a first version for nearby, paired devices: a Windows console server and a native Android browser/editor. The server is the authority for accounts and domains. `bww://garden.bww` is unique **on that computer**, not globally across every Bluetooth server. Connect to another computer to explore its sites; accounts and sessions are separate on each computer.
+
+## Use the built app
+
+Build outputs in this workspace:
+
+- `artifacts/windows-x64/Bww.Server.exe`: self-contained Windows x64 server; .NET need not be installed to run it.
+- `android/app/build/outputs/apk/debug/app-debug.apk`: installable Android development build, signed with a local debug key. Android 8 or newer is required. Distribution releases need your own stable release signing key; never publish that private key.
+
+1. Copy the Windows executable to your Windows 10/11 computer with a Bluetooth Classic adapter. Open PowerShell in its folder and run `./Bww.Server.exe`. Wait for `READY Bluetooth`. Keep the console open while clients use the server.
+2. Install the APK on the Android phone. You may need to allow installation from your chosen file manager. Keep Android System WebView updated.
+3. Pair the phone with the computer using Android and Windows Bluetooth settings. Confirm the pairing code on both devices. The app lists already paired devices; it does not scan for unpaired devices.
+4. Open **Bluetooth-wide Web**, tap **Connect**, grant Bluetooth permission, and choose the paired computer running the server.
+5. Tap **Account → Register**. Choose a username and a password of at least 10 characters. The session is saved on the phone for that computer, for up to 30 days; passwords are not saved on the phone.
+6. Tap **Create Site**, choose a domain, edit HTML, CSS, and JavaScript, then **Publish**. **Check domain** is advisory; publishing claims the name atomically and prevents another account overwriting it.
+7. Type `bww://your-domain.bww` in the URL bar or tap **Sites**. Guests can browse published sites without registering. Use **My Sites** to edit or delete your own sites. Deletion asks for confirmation.
+
+The server persists accounts, hashed session tokens, and sites in `%LOCALAPPDATA%\Bww\store.json`. Stop the server before backing up that file. To use another storage location, run `./Bww.Server.exe --data C:\path\store.json`. One server process may own a store at a time. Do not delete the store unless you intend to remove all accounts and sites. Sessions remain valid across server restarts; signing out revokes that session.
+
+Editor drafts save locally as you type, separately by server and account. Reopening Create Site or the relevant existing site restores its draft. Publishing removes that draft; Close retains it; Discard draft removes it. A disconnected device can retain a draft, but publishing needs a live connection.
+
+## Site format and boundaries
+
+Each site contains three UTF-8 text assets: `index.html`, `style.css`, and `script.js`, limited to **512 KiB combined**. The browser automatically includes the CSS and JavaScript assets. HTML may be a full document or a fragment. Use data URLs for small images/fonts. Other paths, uploads, external scripts/images, fetch requests, forms, iframes, and Internet navigation are not supported in this version. Links between BWW domains load another site from the same server.
+
+The WebView internally uses an intercepted `https://domain.bww/` origin to isolate each site's browser storage. `.bww` does not resolve through Internet DNS. Site JavaScript runs inside the WebView with no native bridge or access to account tokens. Browser storage is cleared when switching computers, since two computers can host the same domain. Local file access and content-provider access are disabled, and the app has no Internet permission. CSP restricts content to these local assets and inline scripts/styles. HTML and JavaScript are intentionally executable site content, not sanitized text.
+
+Passwords use salted PBKDF2-SHA256 with 210,000 iterations. Session tokens are random 256-bit values; the server stores only their SHA-256 digest. Bluetooth uses the secure Android RFCOMM API and the server requires link authentication/encryption before handling requests. There is no additional application-layer encryption or independent server certificate; trust the computer you pair with. Domain ownership is server-side. Each account may publish up to 50 sites and keep up to 10 active sessions; the server handles up to 16 simultaneous connections. This is intended for trusted nearby peers, not a hardened public multi-tenant service. The local Windows user and anyone who can read the data file can access published content and password hashes. Forgotten-password recovery is not implemented.
+
+## Build and test
+
+Prerequisites: .NET SDK 8, a **full JDK 17 or 21** including `javac` and `jlink`, Android SDK platform 35 and build-tools 35.0.0, and Python 3 for server integration tests. Set `JAVA_HOME` and `ANDROID_HOME` as appropriate. Android Studio can install the SDK components. Gradle 8.9 is pinned by the checked-in wrapper and its distribution checksum. NuGet dependencies are pinned by `server/packages.lock.json`.
+
+From the repository root:
+
+```sh
+dotnet restore server --locked-mode
+dotnet build server -c Release --no-restore
+python3 tests/integration.py
+cd android
+./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug
+```
+
+On Windows use `gradlew.bat`. To package the server from the repository root:
+
+```sh
+dotnet publish server -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:NuGetLockFilePath=obj/packages.publish.lock.json -o artifacts/windows-x64
+```
+
+Or run `scripts/package.ps1` in PowerShell to create a Windows ZIP. GitHub Actions builds both components, runs the protocol suite Android unit tests, and Android lint, and uploads the executable and debug APK after successful checks. The workflow has been added but is not claimed to have run on GitHub.
+
+For Linux/macOS development, the same server supports **loopback-only TCP**, using exactly the same framing and API as Bluetooth:
+
+```sh
+dotnet run --project server -- --tcp --data /tmp/bww-dev/store.json
+```
+
+This does not turn the Android Bluetooth client into a TCP client. Five Android JVM tests cover domain normalization, rejected addresses, HTML asset injection, fragments, and routing restrictions; these do not run Android WebView on a device. The integration suite starts its own isolated TCP servers and tests registration, authentication, publishing, ownership, concurrent domain collision, persisted sites/sessions after restart, logout, expiration, limits, malformed messages, and fragmented/coalesced frames. It uses temporary stores, not your real account data.
+
+In this prepared cloud snapshot, `python3 scripts/cloud_build.py` uses the retained SDKs in `/workspace/.tools`, writable caches, and the platform's existing HTTPS proxy. Proxy values and account credentials are not embedded in the repository. Cloud tasks already have an isolated checkout; use it directly without creating a Git worktree.
+
+## Device validation still required
+
+The C# build, protocol integration suite, Windows cross-publish, and Android compilation/lint can be checked in this Linux cloud machine. It has no Windows Bluetooth adapter or Android device, so **real Bluetooth connectivity and Android WebView interaction remain unverified here**. Before relying on the app, perform this device check:
+
+- Pair a Windows computer and Android phone; connect and browse the built-in site template. Confirm the button changes the message and the CSS applies.
+- Publish a site, close/reopen the app, and restart the server. Confirm the account session and published site remain.
+- Connect a second Android phone, sign in as a different account, and confirm it can browse but cannot claim/update the first account's domain.
+- Disable Bluetooth or walk out of range. Confirm connection errors appear; reconnect, reopen a saved draft, and publish again.
+- Revoke Bluetooth permission and confirm the app asks for it on the next connection attempt.
+
+If Connect fails, verify the server says READY Bluetooth, Windows Bluetooth is enabled, the devices are paired, and the chosen device is the Windows computer. The server uses classic Bluetooth, not BLE; BLE-only adapters are insufficient. Use the console to inspect startup errors. There is no macOS/Linux Bluetooth host implementation enabled in this app.
+
+See [PROTOCOL.md](PROTOCOL.md) for the wire format and operation list.

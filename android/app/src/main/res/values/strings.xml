@@ -1,0 +1,4 @@
+<resources>
+    <string name="progress">%1$s…</string>
+    <string name="bww_address" translatable="false">bww://%1$s</string>
+</resources>

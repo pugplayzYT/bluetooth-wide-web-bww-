@@ -1,0 +1,36 @@
+name: Build and test
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Server build and protocol integration tests
+        run: |
+          dotnet restore server --locked-mode
+          dotnet build server -c Release --no-restore
+          python3 tests/integration.py
+      - name: Android build and lint
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug
+      - name: Package Windows server
+        run: dotnet publish server -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:NuGetLockFilePath=obj/packages.publish.lock.json -o artifacts/windows-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Bww-Windows-x64
+          path: artifacts/windows-x64/Bww.Server.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Bww-Android-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
