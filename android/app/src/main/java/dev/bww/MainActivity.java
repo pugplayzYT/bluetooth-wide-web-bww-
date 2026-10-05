@@ -32,6 +32,8 @@ public class MainActivity extends Activity {
     private GestureDetector fullScreenGesture;
     private Toast fullScreenHint;
     private boolean consumeExitTouch;
+    private float touchDownX, touchDownY;
+    private boolean trackingTopGesture;
     private View customView;
     private WebChromeClient.CustomViewCallback customViewCallback;
     private boolean fullScreen, customWasFullScreen;
@@ -44,7 +46,11 @@ public class MainActivity extends Activity {
         fullScreenGesture = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onDown(MotionEvent event) { return true; }
             @Override public boolean onDoubleTap(MotionEvent event) {
-                consumeExitTouch = true; exitFullScreen(); return true;
+                int topBoundary = Math.max(dp(48), topInset);
+                if (event.getY() <= topBoundary) {
+                    consumeExitTouch = true; exitFullScreen(); return true;
+                }
+                return false;
             }
         });
         prefs = getSharedPreferences("bww", MODE_PRIVATE);
@@ -352,6 +358,7 @@ public class MainActivity extends Activity {
         if (entering) {
             MotionEvent reset = MotionEvent.obtain(SystemClock.uptimeMillis(), SystemClock.uptimeMillis(), MotionEvent.ACTION_CANCEL, 0, 0, 0);
             fullScreenGesture.onTouchEvent(reset); reset.recycle();
+            trackingTopGesture = false; consumeExitTouch = false;
             if (fullScreenHint != null) fullScreenHint.cancel();
             fullScreenHint = Toast.makeText(this, R.string.full_screen_hint, Toast.LENGTH_LONG); fullScreenHint.show();
         } else if (!enabled && fullScreenHint != null) fullScreenHint.cancel();
@@ -382,15 +389,43 @@ public class MainActivity extends Activity {
     }
     private void exitFullScreen() { hideCustomView(); setFullScreen(false); }
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
-        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) consumeExitTouch = false;
-        // Observe without consuming normal page taps, scrolling or video controls.
-        // Consume the second tap only when it triggers the native full-screen exit.
-        if (fullScreen) fullScreenGesture.onTouchEvent(event);
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) consumeExitTouch = false;
+        // Observe top-edge gestures without consuming normal page taps, game taps, or scrolling.
+        if (fullScreen) {
+            int topBoundary = Math.max(dp(48), topInset);
+            if (action == MotionEvent.ACTION_DOWN) {
+                touchDownX = event.getX();
+                touchDownY = event.getY();
+                trackingTopGesture = touchDownY <= topBoundary;
+            } else if (action == MotionEvent.ACTION_MOVE && trackingTopGesture) {
+                float dy = event.getY() - touchDownY;
+                float dx = Math.abs(event.getX() - touchDownX);
+                if (dy >= dp(50) && dy > dx) {
+                    trackingTopGesture = false;
+                    consumeExitTouch = true;
+                    MotionEvent cancel = MotionEvent.obtain(event.getDownTime(), event.getEventTime(), MotionEvent.ACTION_CANCEL, event.getX(), event.getY(), 0);
+                    super.dispatchTouchEvent(cancel);
+                    cancel.recycle();
+                    exitFullScreen();
+                    return true;
+                }
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                trackingTopGesture = false;
+            }
+            fullScreenGesture.onTouchEvent(event);
+        }
         if (consumeExitTouch) {
-            if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) consumeExitTouch = false;
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) consumeExitTouch = false;
             return true;
         }
         return super.dispatchTouchEvent(event);
+    }
+    @Override public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_ESCAPE && (fullScreen || customView != null)) {
+            exitFullScreen(); return true;
+        }
+        return super.onKeyUp(keyCode, event);
     }
     @Override public void onWindowFocusChanged(boolean focused) { super.onWindowFocusChanged(focused); if (focused && fullScreen) applySystemBars(); }
     @Override public void onDestroy() { hideCustomView(); if (fullScreenHint != null) fullScreenHint.cancel(); connection.close(); worker.shutdownNow(); web.destroy(); super.onDestroy(); }

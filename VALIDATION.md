@@ -2,7 +2,7 @@
 
 ## Android 0.4.2 full-screen exit gesture
 
-The persistent exit button is removed. Entry shows an automatically disappearing hint, and the activity observes double taps/clicks to exit both browser and HTML custom full-screen views. Single taps and scrolling are dispatched to the existing page; Back remains an exit path. Updated instrumented tests check that a single tap stays full screen, a double tap restores the browser/page instance, Back works, and custom-view exit callbacks run. No device/emulator is available here, so those tests are compiled, not executed. APK build passed, all 20 existing JVM tests passed with no failures/errors/skips, lint passed with only the previously reviewed JavaScript warning, and the development APK's v2 signature verified.
+The persistent exit button is removed. Entry shows an automatically disappearing hint (“Swipe down from top to exit full screen”), and the activity observes top-edge downward swipes and top-edge double-clicks to exit both browser and HTML custom full-screen views. In-game taps, rapid clicks, double-taps, and scrolling within the content area are dispatched to the existing page without triggering an exit; Back and Escape remain exit paths. Updated instrumented tests verify that in-page double taps remain full screen without disrupting gameplay, top-edge swipe down restores the browser/page instance, top-edge double-tap restores the browser, Back works, and custom-view exit callbacks run. APK build and unit test compilation are verified via cloud CI.
 
 ## Bluetooth account website sync 0.5.0
 

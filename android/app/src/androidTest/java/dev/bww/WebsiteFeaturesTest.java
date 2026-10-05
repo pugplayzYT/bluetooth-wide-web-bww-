@@ -69,17 +69,25 @@ public class WebsiteFeaturesTest {
             assertEquals("null", js(scenario, "localStorage.getItem('" + SCORE_KEY + "')"));
         }
     }
-    private void doubleTap(MainActivity activity) {
+    private void doubleTap(MainActivity activity, float x, float y) {
         long start = SystemClock.uptimeMillis();
         for (int tap = 0; tap < 2; ++tap) {
             for (int action : new int[]{MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP}) {
-                MotionEvent event = MotionEvent.obtain(start + tap * 100, start + tap * 100 + (action == MotionEvent.ACTION_UP ? 40 : 0), action, 100, 100, 0);
+                MotionEvent event = MotionEvent.obtain(start + tap * 100, start + tap * 100 + (action == MotionEvent.ACTION_UP ? 40 : 0), action, x, y, 0);
                 activity.dispatchTouchEvent(event); event.recycle();
             }
-            if (tap == 0) assertEquals(View.GONE, activity.findViewById(R.id.browser_controls).getVisibility());
         }
     }
-    @Test public void fullscreenKeepsThePageAndExitsWithDoubleTapOrBack() throws Exception {
+    private void swipeDownFromTop(MainActivity activity) {
+        long start = SystemClock.uptimeMillis();
+        MotionEvent down = MotionEvent.obtain(start, start, MotionEvent.ACTION_DOWN, 100, 10, 0);
+        activity.dispatchTouchEvent(down); down.recycle();
+        MotionEvent move = MotionEvent.obtain(start, start + 50, MotionEvent.ACTION_MOVE, 100, 200, 0);
+        activity.dispatchTouchEvent(move); move.recycle();
+        MotionEvent up = MotionEvent.obtain(start, start + 100, MotionEvent.ACTION_UP, 100, 200, 0);
+        activity.dispatchTouchEvent(up); up.recycle();
+    }
+    @Test public void fullscreenKeepsThePageAndExitsWithSwipeOrBack() throws Exception {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             loadSite(scenario, COMPUTER, "fullscreen");
             js(scenario, "window.testMarker = 'still-playing'; localStorage.setItem('" + SCORE_KEY + "','7')");
@@ -88,9 +96,19 @@ public class WebsiteFeaturesTest {
                 original.set(activity.findViewById(R.id.site_webview));
                 activity.findViewById(R.id.full_screen).performClick();
                 assertEquals(View.GONE, activity.findViewById(R.id.browser_controls).getVisibility());
-                doubleTap(activity);
+                // Rapid taps / double taps inside the page do not exit full screen
+                doubleTap(activity, 100, 200);
+                assertEquals(View.GONE, activity.findViewById(R.id.browser_controls).getVisibility());
+                // Swiping down from top edge exits full screen
+                swipeDownFromTop(activity);
                 assertEquals(View.VISIBLE, activity.findViewById(R.id.browser_controls).getVisibility());
                 assertSame(original.get(), activity.findViewById(R.id.site_webview));
+                // Double tap on the top edge also exits full screen
+                activity.findViewById(R.id.full_screen).performClick();
+                assertEquals(View.GONE, activity.findViewById(R.id.browser_controls).getVisibility());
+                doubleTap(activity, 100, 10);
+                assertEquals(View.VISIBLE, activity.findViewById(R.id.browser_controls).getVisibility());
+                // Back button exits full screen
                 activity.findViewById(R.id.full_screen).performClick();
                 activity.onBackPressed();
                 assertEquals(View.VISIBLE, activity.findViewById(R.id.browser_controls).getVisibility());
@@ -105,7 +123,7 @@ public class WebsiteFeaturesTest {
                 WebView web = activity.findViewById(R.id.site_webview); AtomicInteger hidden = new AtomicInteger();
                 web.getWebChromeClient().onShowCustomView(new FrameLayout(activity), hidden::incrementAndGet);
                 assertEquals(View.GONE, web.getVisibility());
-                doubleTap(activity);
+                swipeDownFromTop(activity);
                 assertEquals(View.VISIBLE, web.getVisibility());
                 assertEquals(View.VISIBLE, activity.findViewById(R.id.browser_controls).getVisibility());
                 assertEquals(1, hidden.get());
