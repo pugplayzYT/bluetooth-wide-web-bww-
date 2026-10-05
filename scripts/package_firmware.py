@@ -40,7 +40,11 @@ binaries['README.txt'] = f'''BWW ESP32 firmware {version}
 For original ESP32 with Bluetooth Classic and at least 4 MB flash.
 This build uses the BWW huge_app partition layout and GPIO5/18/23/19 SD wiring.
 
-UPGRADE an existing BWW 0.4.x/0.5.x ESP32 (your SD accounts/sites remain compatible):
+UPGRADE an existing BWW 0.4.x/0.5.x/0.6.x ESP32:
+Back up the SD card /bww folder first. Firmware 0.6.0 migrates the website index
+without formatting. Do not downgrade to 0.5.2 or earlier after migration.
+Install Android 0.6.0 to list all sites when there are more than 32.
+
 1. Extract this ZIP. Close PlatformIO's serial monitor so COM3 is free.
 2. Open PowerShell in the extracted folder. Change COM3 below if needed.
 3. With your existing PlatformIO installation, run:

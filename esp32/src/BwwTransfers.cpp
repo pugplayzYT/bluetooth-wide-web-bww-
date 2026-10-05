@@ -40,10 +40,8 @@ bool Core::readSite(JsonDocument& rpc, JsonObjectConst record) {
 bool Core::canPublish(const std::string& domain, const std::string& owner, JsonDocument& rpc) {
     auto record = site(domain);
     if (!record.isNull() && owner != record["owner"].as<const char*>()) { failure(rpc, "domain_taken", "Only the owner may change this site"); return false; }
-    if (record.isNull()) {
-        size_t own = 0; for (JsonObjectConst s : state_["sites"].as<JsonArrayConst>()) if (owner == s["owner"].as<const char*>()) ++own;
-        if (state_["sites"].size() >= MAX_SITES || own >= MAX_USER_SITES) { failure(rpc, "capacity", "Device or account site limit reached"); return false; }
-    }
+    if (catalogError_) { failure(rpc, "storage_error", "Could not read website catalog"); return false; }
+    if (!spaceFor(16384)) { failure(rpc, "storage_full", "SD card is full; delete websites or free space on the card"); return false; }
     return true;
 }
 std::string Core::siteFingerprint(JsonDocument& rpc, JsonObjectConst record) {
@@ -89,6 +87,7 @@ std::string Core::siteFingerprint(JsonDocument& rpc, JsonObjectConst record) {
 }
 bool Core::syncUnchanged(const std::string& domain, const std::string& expected, JsonDocument& rpc) {
     auto record = site(domain);
+    if (catalogError_) { failure(rpc, "storage_error", "Could not read website catalog"); return false; }
     std::string actual = record.isNull() ? "missing" : siteFingerprint(rpc, record);
     if (actual.empty()) return false;
     if (actual != expected) { failure(rpc, "sync_conflict", "Destination changed since comparison; compare again"); return false; }
@@ -104,6 +103,7 @@ void Core::transfer(JsonDocument& rpc, const std::string& op, const std::string&
         if (a < 0 || !r["index"].is<size_t>() || !r["revision"].is<uint64_t>()) { failure(rpc, "invalid_request", "Invalid chunk address"); return; }
         size_t index = r["index"]; uint64_t revision = r["revision"];
         auto record = site(domain);
+        if (catalogError_) { failure(rpc, "storage_error", "Could not read website catalog"); return; }
         if (record.isNull()) { failure(rpc, "not_found", "Site not found"); return; }
         if (record["revision"].as<uint64_t>() != revision) { failure(rpc, "site_changed", "Site changed while loading; open it again"); return; }
         if (!readSite(rpc, record)) return;
@@ -158,6 +158,7 @@ void Core::transfer(JsonDocument& rpc, const std::string& op, const std::string&
         if (index != u.chunks[a].size()) { failure(rpc, "invalid_request", "Chunks must be sent once in sequence"); return; }
         if (u.bytes + content.size() > MAX_SITE_BYTES) { failure(rpc, "too_large", "Site exceeds 512 KiB combined HTML/CSS/JS"); return; }
         if (count >= MAX_SITE_CHUNKS) { failure(rpc, "too_many_chunks", "Use full-sized chunks except each asset's last chunk"); return; }
+        if (!spaceFor(content.size() + 16384)) { failure(rpc, "storage_full", "SD card is full; delete websites or free space on the card"); return; }
         auto hash = crypto_.sha256(content);
         rpc.clear();
         if (hash.size() != 64 || !storage_.writeBytes(chunkPath(u.id, a, index), content)) { failure(rpc, "storage_error", "Could not save upload chunk"); return; }
@@ -195,9 +196,11 @@ void Core::transfer(JsonDocument& rpc, const std::string& op, const std::string&
         }
     } // Release the chunk buffer before allocating the state commit verifier.
     rpc.clear(); // Verified site metadata is no longer needed by this request.
-    auto record = site(u.domain);
-    if (record.isNull()) record = state_["sites"].as<JsonArray>().createNestedObject();
-    record["domain"] = u.domain; record["owner"] = owner; record["revision"] = revision;
+    {
+        StaticJsonDocument<512> link; link["domain"] = u.domain; link["revision"] = revision;
+        if (!storage_.writeJson("/bww/sites/" + u.id + ".ref", link)) { storage_.remove(path); failure(rpc, "storage_error", "Could not save upload reference"); return; }
+    }
+    if (!storeSite(u.domain, owner, revision)) { storage_.remove(path); failure(rpc, "storage_error", "Could not update website catalog on SD"); return; }
     if (!commit()) { storage_.remove(path); failure(rpc, "storage_error", "Could not commit site to SD"); return; }
     std::string domain = u.domain; uploads_.erase(it);
     auto published = success(rpc); published["domain"] = domain; published["published"] = true;

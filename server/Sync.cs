@@ -26,7 +26,7 @@ public sealed class WireSyncPeer(Stream stream, CancellationToken cancellation) 
         using var reply = JsonDocument.Parse(line, new JsonDocumentOptions { MaxDepth = 16 });
         if (!reply.RootElement.GetProperty("ok").GetBoolean())
             throw new ApiError(reply.RootElement.GetProperty("error").GetString()!, reply.RootElement.GetProperty("message").GetString()!);
-        return reply.RootElement.GetProperty("data").Clone();
+        return (reply.RootElement.TryGetProperty("catalogGeneration", out _) ? reply.RootElement : reply.RootElement.GetProperty("data")).Clone();
     }
 }
 public sealed record SyncSite(string Domain, string Owner, string Fingerprint);
@@ -34,13 +34,29 @@ public sealed record SyncDifference(string Domain, SyncSite? Pc, SyncSite? Devic
 public sealed class SiteSync(ISyncPeer pc, ISyncPeer device, string pcToken, string deviceToken)
 {
     private static readonly UTF8Encoding Utf8 = new(false, true);
+    private static async Task<List<JsonElement>> Listing(ISyncPeer peer, string op, string? token = null)
+    {
+        var result = new List<JsonElement>(); int offset = 0; ulong? generation = null;
+        while (true)
+        {
+            var request = new Dictionary<string, object?> { ["op"] = op };
+            if (token != null) request["token"] = token;
+            if (generation != null) { request["offset"] = offset; request["catalogGeneration"] = generation; }
+            var reply = await peer.Call(request);
+            var data = reply.ValueKind == JsonValueKind.Array ? reply : reply.GetProperty("data");
+            result.AddRange(data.EnumerateArray().Select(e => e.Clone()));
+            if (reply.ValueKind == JsonValueKind.Array || !reply.TryGetProperty("nextOffset", out var next)) return result;
+            if (next.GetInt32() <= offset) throw new IOException("Invalid website list page");
+            offset = next.GetInt32(); generation = reply.GetProperty("catalogGeneration").GetUInt64();
+        }
+    }
     public async Task<List<SyncDifference>> Compare()
     {
         async Task<Dictionary<string, SyncSite>> Manifest(ISyncPeer peer, string token)
         {
             var owner = (await peer.Call(new { op = "me", token })).GetProperty("username").GetString();
             var result = new Dictionary<string, SyncSite>(StringComparer.Ordinal);
-            foreach (var entry in (await peer.Call(new { op = "sync_manifest", token })).EnumerateArray())
+            foreach (var entry in await Listing(peer, "sync_manifest", token))
             {
                 var domain = entry.GetProperty("domain").GetString()!;
                 var fingerprint = entry.GetProperty("fingerprint").GetString()!;
@@ -51,8 +67,8 @@ public sealed class SiteSync(ISyncPeer pc, ISyncPeer device, string pcToken, str
             return result;
         }
         var left = await Manifest(pc, pcToken); var right = await Manifest(device, deviceToken);
-        var leftDomains = (await pc.Call(new { op = "list" })).EnumerateArray().Select(e => e.GetProperty("domain").GetString()!).ToHashSet();
-        var rightDomains = (await device.Call(new { op = "list" })).EnumerateArray().Select(e => e.GetProperty("domain").GetString()!).ToHashSet();
+        var leftDomains = (await Listing(pc, "list")).Select(e => e.GetProperty("domain").GetString()!).ToHashSet();
+        var rightDomains = (await Listing(device, "list")).Select(e => e.GetProperty("domain").GetString()!).ToHashSet();
         return left.Keys.Union(right.Keys).OrderBy(s => s, StringComparer.Ordinal).Select(domain =>
             new SyncDifference(domain, left.GetValueOrDefault(domain), right.GetValueOrDefault(domain),
                 !left.ContainsKey(domain) && leftDomains.Contains(domain) ? "domain belongs to another account on PC" :

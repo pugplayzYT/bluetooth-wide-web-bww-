@@ -52,6 +52,13 @@ class SyncTests(unittest.TestCase):
         result=subprocess.run([DOTNET,str(DLL),'--sync','--sync-tcp',str(port),'--data',str(self.pc)],input=data,text=True,capture_output=True,timeout=90)
         thread.join(5);listener.close();self.assertFalse(thread.is_alive());self.assertFalse(errors,errors)
         return result
+    def test_pc_sync_reads_all_pages_beyond_32_websites(self):
+        for i in range(35): self.fw_site('site '+str(i),domain=f'page-{i}.bww')
+        result=self.run_sync(['D']*35)
+        self.assertEqual(result.returncode,0,result.stderr)
+        sites=json.loads(self.pc.read_text())['Sites']
+        self.assertEqual(len(sites),35); self.assertEqual(sites['page-34.bww']['Html'],'site 34')
+
     def test_preview_cancel_and_pc_to_esp_then_noop(self):
         self.pc_site('<h1>PC 💚</h1>');before=json.loads(self.pc.read_text())['Sites']
         r=self.run_sync(['P'],accept=False);self.assertEqual(r.returncode,0,r.stderr)

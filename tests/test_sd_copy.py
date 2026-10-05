@@ -91,7 +91,7 @@ class CopyTests(unittest.TestCase):
         self.assertEqual(self.card_bytes(),before)
     def test_card_limits_invalid_stores_and_corrupt_snapshots_fail_without_reset(self):
         self.write_pc(store(sites={f'site-{i}.bww':site(f'site-{i}.bww') for i in range(9)}))
-        with self.assertRaisesRegex(tool.CopyError,'ESP32 limits'): tool.plan_copy(self.pc,self.sd)
+        self.copy(); self.assertEqual(len(tool.load_sd(self.sd).sites),9)
         self.write_pc(store(sites={'garden.bww':site()})); self.copy()
         for path in (self.sd/'bww').glob('state-*.json'): path.write_text('{broken')
         before=self.card_bytes()
@@ -99,6 +99,15 @@ class CopyTests(unittest.TestCase):
         self.assertEqual(self.card_bytes(),before)
         self.pc.write_text('{"not":"a store"}')
         with self.assertRaises(tool.CopyError): tool.load_desktop(self.pc)
+    def test_copy_more_than_24_sites_uses_sd_catalog_pages(self):
+        self.write_pc(store(sites={f'site-{i}.bww':site(f'site-{i}.bww') for i in range(41)}))
+        self.copy(); loaded=tool.load_sd(self.sd)
+        self.assertEqual(len(loaded.sites),41); self.assertEqual(loaded.state['sites'],[])
+        self.assertEqual(loaded.state['catalogPages'],6)
+        self.write_pc(store(sites={'site-40.bww':site('site-40.bww',html='updated')}))
+        self.copy(); self.assertEqual(len(tool.load_sd(self.sd).sites),41)
+        self.assertEqual(tool.load_sd(self.sd).sites['site-40.bww']['html'],'updated')
+
     def test_preview_changes_backup_inside_card_and_symlinks_are_rejected(self):
         plan=tool.plan_copy(self.pc,self.sd); self.write_pc(store(sites={'changed.bww':site('changed.bww')}))
         with self.assertRaisesRegex(tool.CopyError,'changed since preview'): tool.apply_copy(plan,self.backups)

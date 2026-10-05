@@ -286,7 +286,19 @@ public class MainActivity extends Activity {
     }
     private void listSites(boolean mine) {
         task(mine ? "Loading your sites" : "Discovering sites", () -> {
-            JSONArray sites = connection.envelope(mine ? authenticated("mine") : request("list")).getJSONArray("data");
+            JSONArray sites = new JSONArray();
+            JSONObject query = mine ? authenticated("mine") : request("list");
+            int offset = 0;
+            while (true) {
+                JSONObject reply = connection.envelope(query);
+                JSONArray page = reply.getJSONArray("data");
+                for (int i = 0; i < page.length(); i++) sites.put(page.getJSONObject(i));
+                if (!reply.has("nextOffset")) break;
+                int next = reply.getInt("nextOffset");
+                if (next <= offset) throw new java.io.IOException("Invalid website list page");
+                offset = next;
+                query.put("offset", offset).put("catalogGeneration", reply.getLong("catalogGeneration"));
+            }
             String[] names = new String[sites.length()]; for (int i=0;i<names.length;i++) names[i] = sites.getJSONObject(i).getString("domain");
             ui(() -> {
                 if (names.length == 0) { notice(mine ? "No sites yet. Tap Create Site." : "No published sites on this server yet."); return; }

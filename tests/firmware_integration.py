@@ -145,7 +145,7 @@ class FirmwareTests(unittest.TestCase):
         stats = self.ok('unused', _test='memory_stats')
         self.assertEqual(stats['rejected'], 0)
         self.assertLessEqual(stats['peak'], 65536)
-        self.assertEqual(stats['live'], 40960)
+        self.assertEqual(stats['live'], 40960 + 512)
         # A reboot keeps current and fallback generations, and drops old ones.
         self.stop(); self.start()
         self.assertEqual(self.load_chunks('memory')['html'], ('x' * 8192) * 4 + '4')
@@ -249,18 +249,115 @@ class FirmwareTests(unittest.TestCase):
         html='💚' * 4000
         self.ok('publish',token=token,domain='unicode',html=html,css='',js='')
         self.assertEqual(self.ok('get',domain='unicode')['html'],html)
-    def test_session_and_site_quotas_remain_bounded(self):
+    def test_sessions_stay_bounded_and_websites_exceed_old_quotas(self):
         first = self.register()
         for _ in range(4): self.ok('login',username='alice',password='correct horse battery')
         self.error('unauthorized','me',token=first)
         active=self.ok('login',username='alice',password='correct horse battery')['token']
-        for i in range(8): self.publish(active,domain=f'site-{i}')
-        self.error('capacity','publish',token=active,domain='site-9',html='hi',css='',js='')
-        self.publish(active,domain='site-0',html='updated at quota')
+        self.control(_test='memory_budget', bytes=65536)
+        for i in range(41): self.publish(active,domain=f'site-{i}')
+        self.publish(active,domain='site-0',html='updated beyond old quota')
+        first=self.call('mine',token=active)
+        self.assertEqual(len(first['data']),32)
+        second=self.call('mine',token=active,offset=first['nextOffset'],catalogGeneration=first['catalogGeneration'])
+        self.assertEqual(len(second['data']),9); self.assertNotIn('nextOffset',second)
+        self.assertEqual(len({s['domain'] for s in first['data']+second['data']}),41)
+        self.assertEqual(self.ok('get',domain='site-40')['owner'],'alice')
+        stats=self.ok('unused',_test='memory_stats'); self.assertEqual(stats['rejected'],0)
+        self.stop(); self.start()
+        self.assertEqual(self.ok('get',domain='site-0')['html'],'updated beyond old quota')
+        self.assertEqual(self.ok('get',domain='site-40')['owner'],'alice')
     def test_site_corruption_returns_error_and_owner_can_repair_it(self):
         token = self.register(); self.publish(token)
         site = next((self.root/'bww/sites').glob('*.json'))
         data=json.loads(site.read_text()); data['data']['html']='changed without checksum'; site.write_text(json.dumps(data))
         self.error('storage_error','get',domain='garden')
         self.publish(token,html='repaired'); self.assertEqual(self.ok('get',domain='garden')['html'],'repaired')
+    def test_sd_space_and_reserve_block_uploads_without_losing_existing_sites(self):
+        token=self.register(); self.publish(token)
+        hello=self.ok('hello'); self.assertEqual(hello['storageBytes'],32*1024**3)
+        self.assertEqual(hello['siteQuota'],'sd-space'); self.assertNotIn('maxSites',hello)
+        self.control(_test='sd_space',bytes=128*1024+100)
+        self.error('storage_full','publish_begin',token=token,domain='new')
+        self.error('storage_full','publish',token=token,domain='garden',html='replacement',css='',js='')
+        self.assertEqual(self.ok('get',domain='garden')['html'],'<h1>Hello</h1>')
+        self.control(_test='sd_space',bytes=1024*1024)
+        self.chunked_site(token,domain='new',html='accepted')
+        self.assertEqual(self.load_chunks('new')['html'],'accepted')
+
+    def test_catalog_failure_does_not_become_committed_by_later_login_or_checkpoint(self):
+        token=self.register(); self.publish(token)
+        self.control(_test='fail_next_state')
+        self.error('storage_error','publish',token=token,domain='garden',html='uncommitted',css='',js='')
+        self.control(_test='advance',seconds=301)
+        self.assertEqual(self.ok('get',domain='garden')['html'],'<h1>Hello</h1>')
+        self.stop(); self.start()
+        self.assertEqual(self.ok('get',domain='garden')['html'],'<h1>Hello</h1>')
+
+    def test_listing_detects_changes_between_pages(self):
+        token=self.register()
+        for i in range(33): self.publish(token,domain=f'page-{i}')
+        first=self.call('list'); self.publish(token,domain='new')
+        self.error('catalog_changed','list',offset=first['nextOffset'],catalogGeneration=first['catalogGeneration'])
+        self.error('invalid_request','list',offset=-1)
+
+    def test_legacy_052_card_migrates_without_losing_accounts_sessions_or_sites(self):
+        import hashlib
+        token=self.register(); self.publish(token); self.stop()
+        slots=list((self.root/'bww').glob('state-*.json'))
+        snapshot=max((json.loads(p.read_text()) for p in slots),key=lambda s:s['generation'])
+        snapshot.pop('digest'); snapshot.pop('siteCatalog'); snapshot.pop('catalogPages'); snapshot.pop('catalogRevision')
+        site=next((self.root/'bww/sites').glob('*.json')); data=json.loads(site.read_text())['data']
+        snapshot['sites']=[{k:data[k] for k in ('domain','owner','revision')}]
+        snapshot['digest']=hashlib.sha256(json.dumps(snapshot,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+        for slot in slots: slot.write_text(json.dumps(snapshot,separators=(',',':')))
+        self.start()
+        self.assertEqual(self.ok('me',token=token)['username'],'alice')
+        self.assertEqual(self.ok('get',domain='garden')['html'],'<h1>Hello</h1>')
+        for i in range(10): self.publish(token,domain=f'migrated-{i}')
+
+    def test_interrupted_catalog_accelerator_falls_back_to_verified_pages(self):
+        token=self.register(); self.publish(token)
+        lookup=self.root/'bww/catalog/garden.bww.lookup'
+        lookup.write_text('{interrupted')
+        self.assertEqual(self.ok('get',domain='garden')['html'],'<h1>Hello</h1>')
+        bob=self.register('bob')
+        self.error('domain_taken','publish',token=bob,domain='garden',html='overwrite',css='',js='')
+        self.stop(); self.start()
+        self.assertEqual(self.ok('get',domain='garden')['owner'],'alice')
+
+    def test_sd_runs_out_of_space_mid_upload_preserves_the_previous_site(self):
+        token=self.register(); self.chunked_site(token,domain='space',html='old')
+        transfer=self.begin_upload(token,'space'); self.chunk(token,transfer,'html',0,'new')
+        self.control(_test='sd_space',bytes=128*1024)
+        self.error('storage_full','publish_chunk',token=token,transfer=transfer,asset='html',index=1,data='tail'.encode().hex())
+        self.assertEqual(self.load_chunks('space')['html'],'old')
+        self.control(_test='sd_space',bytes=1024*1024)
+        self.chunk(token,transfer,'html',1,'tail'); self.ok('publish_commit',token=token,transfer=transfer)
+        self.assertEqual(self.load_chunks('space')['html'],'newtail')
+
+    def test_deletion_can_use_reserved_space_when_new_uploads_are_blocked(self):
+        token=self.register(); self.publish(token)
+        self.control(_test='sd_space',bytes=128*1024)
+        self.error('storage_full','publish_begin',token=token,domain='blocked')
+        self.ok('delete',token=token,domain='garden')
+        self.error('not_found','get',domain='garden')
+        self.control(_test='advance',seconds=301)
+        self.assertFalse(list((self.root/'bww/sites').glob('*.json')))
+
+    def test_partial_future_page_proof_is_ignored_then_discarded_after_restart(self):
+        import hashlib
+        token=self.register(); self.publish(token); self.stop()
+        root=max((json.loads(p.read_text()) for p in (self.root/'bww').glob('state-*.json')),key=lambda s:s['generation'])
+        versions=[(p,json.loads(p.read_text())) for p in (self.root/'bww/catalog').glob('0-*.json')]
+        used={p.name for p,v in versions if v['generation'] in (root['generation'],root['generation']-1)}
+        slot=next(i for i in range(3) if f'0-{i}.json' not in used)
+        data=max((v for p,v in versions),key=lambda v:v['generation'])
+        data['generation']=root['generation']+1; data['sites']=[]
+        path=self.root/f'bww/catalog/0-{slot}.json'; path.write_text(json.dumps(data,separators=(',',':')))
+        proof=path.with_name(path.name+'.ok'); proof.write_text(hashlib.sha256(path.read_bytes()).hexdigest()[:19])
+        self.start(); self.ok("hello"); self.assertFalse(proof.exists())
+        self.control(_test='advance',seconds=301)
+        self.assertEqual(self.ok('get',domain='garden')['html'],'<h1>Hello</h1>')
+
 if __name__ == '__main__': unittest.main(verbosity=2)

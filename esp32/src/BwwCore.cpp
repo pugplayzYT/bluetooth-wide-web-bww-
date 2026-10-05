@@ -81,8 +81,8 @@ bool Core::validState(JsonDocument& state) {
     std::string expected = state["digest"].as<std::string>(); state.remove("digest");
     auto actual = crypto_.jsonDigest(state.as<JsonVariantConst>()); state["digest"] = expected;
     if (actual.size() != 64 || !constantTimeEqual(expected, actual)) return false;
-    if (state["users"].size() > MAX_USERS || state["sessions"].size() > MAX_SESSIONS || state["sites"].size() > MAX_SITES) return false;
-    std::set<std::string> users, domains;
+    if (state["users"].size() > MAX_USERS || state["sessions"].size() > MAX_SESSIONS || (state["siteCatalog"] != "paged-v1" && state["sites"].size() > 24)) return false;
+    std::set<std::string> users;
     for (JsonObjectConst u : state["users"].as<JsonArrayConst>()) {
         std::string name = u["name"] | ""; std::vector<uint8_t> bytes;
         if (!asciiName(name, 3, 32, true) || !users.insert(name).second || !unhex(u["salt"] | "", bytes) || bytes.size() != 16 || !unhex(u["hash"] | "", bytes) || bytes.size() != 32) return false;
@@ -91,15 +91,19 @@ bool Core::validState(JsonDocument& state) {
         std::vector<uint8_t> bytes;
         if (!users.count(s["user"] | "") || !s["expires"].is<uint64_t>() || !unhex(s["key"] | "", bytes) || bytes.size() != 32) return false;
     }
-    for (JsonObjectConst s : state["sites"].as<JsonArrayConst>()) {
-        std::string name = s["domain"] | "", canonical;
-        if (!canonicalDomain(name, canonical) || name != canonical || !domains.insert(name).second || !users.count(s["owner"] | "") || !s["revision"].is<uint64_t>() || !storage_.exists(sitePath(s))) return false;
-    }
+    if (state["siteCatalog"] == "paged-v1" && (!state["catalogPages"].is<size_t>() || state["sites"].size())) return false;
+    bool good = true;
+    if (!visitSites(state, [&](JsonObjectConst record) {
+        std::string name = record["domain"] | "", canonical;
+        if (!canonicalDomain(name, canonical) || name != canonical || !users.count(record["owner"] | "") ||
+            !record["revision"].is<uint64_t>() || !storage_.exists(sitePath(record))) good = false;
+    })) return false;
+    if (!good) return false;
     return true;
 }
 bool Core::begin() {
     ready_ = false; uploads_.clear();
-    if (state_.capacity() != STATE_CAPACITY || !storage_.mkdir("/bww") || !storage_.mkdir("/bww/sites")) return false;
+    if (state_.capacity() != STATE_CAPACITY || siteRecord_.capacity() != 512 || !storage_.mkdir("/bww") || !storage_.mkdir("/bww/sites") || !storage_.mkdir("/bww/catalog")) return false;
     bool any = storage_.exists(slot(0)) || storage_.exists(slot(1)), found = false; uint64_t best = 0;
     {
         DynamicJsonDocument candidate(STATE_CAPACITY);
@@ -117,10 +121,17 @@ bool Core::begin() {
         state_.createNestedArray("users"); state_.createNestedArray("sessions"); state_.createNestedArray("sites");
         if (!commit()) return false;
     }
-    clock_ = checkpoint_ = state_["clock"].as<uint64_t>(); ready_ = true; pruneSites(); return true;
+    clock_ = checkpoint_ = state_["clock"].as<uint64_t>();
+    backupGeneration_ = state_["generation"].as<uint64_t>() ? state_["generation"].as<uint64_t>() - 1 : 0;
+    if (!discardFuturePages(state_["generation"])) return false;
+    if (!migrateCatalog()) return false;
+    ready_ = true; pruneSites(); return true;
 }
 bool Core::commit() {
-    if (state_.overflowed()) { storage_.readJson(slot(active_), state_); return false; }
+    if (state_.overflowed()) {
+        if (!storage_.readJson(slot(active_), state_) || !discardFuturePages(state_["generation"])) ready_ = false;
+        return false;
+    }
     uint64_t generation = state_["generation"].as<uint64_t>();
     state_["generation"] = generation + 1; state_["clock"] = clock_; state_.remove("digest");
     auto digest = crypto_.jsonDigest(state_.as<JsonVariantConst>()); state_["digest"] = digest;
@@ -133,48 +144,78 @@ bool Core::commit() {
     } // Release verification buffer before cleanup.
     if (!written) {
         storage_.remove(slot(next));
+        if (!discardFuturePages(generation)) ready_ = false;
         if (!storage_.readJson(slot(active_), state_) || !validState(state_)) ready_ = false;
         return false;
     }
-    active_ = next; checkpoint_ = clock_; pruneSites(); return true;
+    backupGeneration_ = generation; active_ = next; checkpoint_ = clock_; pruneSites(); return true;
 }
 void Core::pruneSites() {
-    // Bounds depend on site/upload limits, never the number of SD chunk files.
-    std::set<std::string> manifests, transfers;
-    for (JsonObjectConst site : state_["sites"].as<JsonArrayConst>()) manifests.insert(sitePath(site));
-    {
-        DynamicJsonDocument backup(STATE_CAPACITY);
-        if (backup.capacity() != STATE_CAPACITY) return;
-        const auto path = slot(1 - active_);
-        if (storage_.exists(path)) {
-            // An unreadable backup may still own chunks: skip all deletion.
-            if (!storage_.readJson(path, backup) || !validState(backup)) return;
-            for (JsonObjectConst site : backup["sites"].as<JsonArrayConst>()) manifests.insert(sitePath(site));
-        }
+    // Keep only the catalog coordinates from the fallback snapshot, not its
+    // account/session document, while checking site metadata and deleting files.
+    DynamicJsonDocument backup(CATALOG_CAPACITY);
+    if (backup.capacity() != CATALOG_CAPACITY) return;
+    bool hasBackup = storage_.exists(slot(1 - active_));
+    if (hasBackup) {
+        DynamicJsonDocument snapshot(STATE_CAPACITY);
+        if (snapshot.capacity() != STATE_CAPACITY || !storage_.readJson(slot(1 - active_), snapshot) || !validState(snapshot)) return;
+        backup["generation"] = snapshot["generation"];
+        backup["siteCatalog"] = snapshot["siteCatalog"]; backup["catalogPages"] = snapshot["catalogPages"];
+        backup["sites"] = snapshot["sites"];
+        if (backup.overflowed()) return;
     }
+    // Ensure all retained metadata is readable before removing any orphan.
+    // This buffer is released before opening the directory.
     {
-        DynamicJsonDocument metadata(RPC_CAPACITY);
-        if (metadata.capacity() != RPC_CAPACITY) return;
-        for (const auto& path : manifests) {
-            if (!storage_.readJson(path, metadata)) return;
-            JsonObjectConst data = metadata["data"];
+        DynamicJsonDocument metadata(INLINE_SITE_BYTES);
+        if (metadata.capacity() != INLINE_SITE_BYTES) return;
+        bool good = true;
+        auto verify = [&](JsonObjectConst record) {
+            if (!good) return;
+            if (!storage_.readJson(sitePath(record), metadata) ||
+                !constantTimeEqual(metadata["digest"] | "", crypto_.jsonDigest(metadata["data"]))) { good = false; return; }
+            auto data = metadata["data"];
             if (data["transferMode"] == "chunk-v1") {
-                if (!validChunks(data)) return;
-                transfers.insert(data["transfer"].as<std::string>());
+                if (!validChunks(data)) { good = false; return; }
+                std::string ref = "/bww/sites/" + data["transfer"].as<std::string>() + ".ref";
+                StaticJsonDocument<512> link;
+                if (!storage_.exists(ref)) {
+                    link["domain"] = record["domain"]; link["revision"] = record["revision"];
+                    if (!storage_.writeJson(ref, link)) good = false;
+                } else if (!storage_.readJson(ref, link) || link["domain"] != record["domain"] || link["revision"] != record["revision"]) good = false;
+            }
+        };
+        if (!visitSites(state_, verify) || !good) return;
+        if (hasBackup && (!visitSites(backup, verify) || !good)) return;
+    }
+    storage_.visitFiles("/bww/sites", [&](const std::string& file) {
+        bool manifest = file.size() > 5 && file.substr(file.size() - 5) == ".json";
+        bool chunk = file.size() > 4 && file.substr(file.size() - 4) == ".bin";
+        bool reference = file.size() > 4 && file.substr(file.size() - 4) == ".ref";
+        if (!manifest && !chunk && !reference) return;
+        std::string domain; uint64_t revision = 0;
+        if (chunk || reference) {
+            auto name = file.substr(file.find_last_of('/') + 1), id = name.substr(0, name.find('.'));
+            for (const auto& upload : uploads_) if (id == upload.id) return;
+            auto ref = "/bww/sites/" + id + ".ref";
+            if (storage_.exists(ref)) {
+                StaticJsonDocument<512> link;
+                if (!storage_.readJson(ref, link) || !link["domain"].is<const char*>() || !link["revision"].is<uint64_t>()) return;
+                domain = link["domain"].as<std::string>(); revision = link["revision"];
             }
         }
-    } // Free metadata before opening the directory or any of its files.
-    for (const auto& upload : uploads_) transfers.insert(upload.id);
-    storage_.visitFiles("/bww/sites", [&](const std::string& path) {
-        bool manifest = path.size() > 5 && path.substr(path.size() - 5) == ".json";
-        bool chunk = path.size() > 4 && path.substr(path.size() - 4) == ".bin";
-        if (manifest && !manifests.count(path)) storage_.remove(path);
-        if (chunk) {
-            const auto name = path.substr(path.find_last_of('/') + 1);
-            // Keep the entire live transfer namespace, including staged chunks.
-            const auto separator = name.find('.');
-            if (separator != std::string::npos && !transfers.count(name.substr(0, separator))) storage_.remove(path);
+        if (manifest) {
+            auto name = file.substr(file.find_last_of('/') + 1); auto end = name.find(".bww.");
+            if (end != std::string::npos) domain = name.substr(0, end + 4);
         }
+        StaticJsonDocument<512> record; bool keep = false;
+        auto check = [&](JsonDocument& snapshot) {
+            if (!lookupSite(snapshot, domain, record)) return false;
+            if (!record.isNull() && (manifest ? file == sitePath(record.as<JsonObjectConst>()) : revision == record["revision"].as<uint64_t>())) keep = true;
+            return true;
+        };
+        if (!domain.empty() && (!check(state_) || (hasBackup && !keep && !check(backup)))) return;
+        if (!keep) storage_.remove(file);
     });
 }
 
@@ -187,7 +228,10 @@ bool Core::advance(uint32_t seconds) {
     return ready_;
 }
 JsonObject Core::user(const std::string& name) { for (JsonObject u : state_["users"].as<JsonArray>()) if (name == u["name"].as<const char*>()) return u; return JsonObject(); }
-JsonObject Core::site(const std::string& name) { for (JsonObject s : state_["sites"].as<JsonArray>()) if (name == s["domain"].as<const char*>()) return s; return JsonObject(); }
+JsonObject Core::site(const std::string& name) {
+    catalogError_ = !lookupSite(state_, name, siteRecord_);
+    return siteRecord_.as<JsonObject>();
+}
 std::string Core::identity(JsonObjectConst r) {
     if (!r["token"].is<JsonString>()) return "";
     JsonString token = r["token"].as<JsonString>(); if (token.size() > 128) return "";
@@ -205,7 +249,7 @@ void Core::execute(JsonDocument& rpc) {
     if (op == "hello") {
         auto d = success(rpc); d["protocol"] = 1; d["name"] = "Bluetooth-wide Web ESP32"; d["maxSiteBytes"] = MAX_SITE_BYTES;
         d["maxBtClients"] = MAX_BT_CLIENTS; d["siteTransfer"] = "chunk-v1"; d["chunkBytes"] = CHUNK_BYTES;
-        d["firmwareVersion"] = FIRMWARE_VERSION; d["maxUsers"] = MAX_USERS; d["maxSites"] = MAX_SITES; d["sessionClock"] = "powered-time"; d["siteSync"] = "account-v1"; return;
+        d["firmwareVersion"] = FIRMWARE_VERSION; d["maxUsers"] = MAX_USERS; d["siteQuota"] = "sd-space"; d["storageBytes"] = storage_.totalBytes(); d["freeStorageBytes"] = storage_.freeBytes(); d["storageReserveBytes"] = SD_RESERVE_BYTES; d["siteListing"] = "paged-v1"; d["sessionClock"] = "powered-time"; d["siteSync"] = "account-v1"; return;
     }
     if (op == "register" || op == "login") {
         std::string name, password;
@@ -239,18 +283,6 @@ void Core::execute(JsonDocument& rpc) {
     if (op == "me" || op == "logout" || op == "mine" || op == "sync_manifest" || op == "sync_publish_begin" || op == "publish" || op == "delete" || op == "publish_begin" || op == "publish_chunk" || op == "publish_commit" || op == "publish_cancel") {
         name = identity(r); if (name.empty()) { failure(rpc, "unauthorized", "Sign in again; your session is missing or expired"); return; }
     }
-    if (op == "sync_manifest") {
-        struct Summary { std::string domain, fingerprint; };
-        std::vector<Summary> summaries;
-        for (JsonObjectConst record : state_["sites"].as<JsonArrayConst>()) if (name == record["owner"].as<const char*>()) {
-            std::string domain = record["domain"].as<std::string>();
-            auto fingerprint = siteFingerprint(rpc, record); if (fingerprint.empty()) return;
-            summaries.push_back({domain, fingerprint});
-        }
-        auto data = successArray(rpc);
-        for (const auto& s : summaries) { auto entry = data.createNestedObject(); entry["domain"] = s.domain; entry["owner"] = name; entry["fingerprint"] = s.fingerprint; }
-        return;
-    }
     if (op == "sync_publish_begin" || op == "publish_begin" || op == "publish_chunk" || op == "publish_commit" || op == "publish_cancel" || op == "get_chunk") {
         transfer(rpc, op, name); return;
     }
@@ -262,11 +294,35 @@ void Core::execute(JsonDocument& rpc) {
         if (!commit()) { failure(rpc, "storage_error", "Could not save sign-out to SD"); return; }
         success(rpc)["signedOut"] = true; return;
     }
-    if (op == "list" || op == "mine") {
-        auto data = successArray(rpc);
-        for (JsonObjectConst s : state_["sites"].as<JsonArrayConst>()) if (op == "list" || name == s["owner"].as<const char*>()) {
-            auto d = data.createNestedObject(); d["domain"] = s["domain"]; d["owner"] = s["owner"]; d["updated"] = nullptr; d["revision"] = s["revision"];
+    if (op == "list" || op == "mine" || op == "sync_manifest") {
+        size_t offset = 0;
+        if (r.containsKey("offset")) {
+            if (!r["offset"].is<size_t>()) { failure(rpc, "invalid_request", "Invalid listing offset"); return; }
+            offset = r["offset"];
         }
+        uint64_t generation = state_["catalogRevision"] | uint64_t(0);
+        if (r.containsKey("catalogGeneration") && (!r["catalogGeneration"].is<uint64_t>() || r["catalogGeneration"].as<uint64_t>() != generation)) {
+            failure(rpc, "catalog_changed", "Website list changed; load it again"); return;
+        }
+        struct Summary { std::string domain, owner; uint64_t revision; std::string fingerprint; };
+        std::vector<Summary> summaries; size_t matched = 0; bool good = true;
+        bool read = visitSites(state_, [&](JsonObjectConst record) {
+            if (!good || (op != "list" && name != record["owner"].as<const char*>())) return;
+            if (matched++ < offset || summaries.size() >= LIST_PAGE_SITES) return;
+            Summary summary{record["domain"].as<std::string>(), record["owner"].as<std::string>(), record["revision"], ""};
+            if (op == "sync_manifest") { summary.fingerprint = siteFingerprint(rpc, record); if (summary.fingerprint.empty()) { good = false; return; } }
+            summaries.push_back(std::move(summary));
+        });
+        if (!read) { failure(rpc, "storage_error", "Could not read website catalog"); return; }
+        if (!good) return;
+        auto data = successArray(rpc);
+        for (const auto& summary : summaries) {
+            auto entry = data.createNestedObject(); entry["domain"] = summary.domain; entry["owner"] = summary.owner;
+            if (op == "sync_manifest") entry["fingerprint"] = summary.fingerprint;
+            else { entry["updated"] = nullptr; entry["revision"] = summary.revision; }
+        }
+        rpc["catalogGeneration"] = generation;
+        if (matched > offset && matched - offset > summaries.size()) rpc["nextOffset"] = offset + summaries.size();
         return;
     }
     if (op != "available" && op != "get" && op != "publish" && op != "delete") { failure(rpc, "unknown_operation", "Unknown operation"); return; }
@@ -274,6 +330,7 @@ void Core::execute(JsonDocument& rpc) {
     if (!field(r, "domain", 128, input, rpc)) return;
     if (!canonicalDomain(input, domain)) { failure(rpc, "invalid_domain", "Use 1-63 ASCII letters, numbers, or internal hyphens"); return; }
     JsonObject record = site(domain);
+    if (catalogError_) { failure(rpc, "storage_error", "Could not read website catalog"); return; }
     if (op == "available") { auto d = success(rpc); d["domain"] = domain; d["available"] = record.isNull(); return; }
     if (op == "get") {
         if (record.isNull()) { failure(rpc, "not_found", "Site not found on this server"); return; }
@@ -282,8 +339,7 @@ void Core::execute(JsonDocument& rpc) {
     if (!record.isNull() && name != record["owner"].as<const char*>()) { failure(rpc, op == "publish" ? "domain_taken" : "forbidden", "Only the owner may change this site"); return; }
     if (op == "delete") {
         if (record.isNull()) { failure(rpc, "not_found", "Site not found"); return; }
-        auto sites = state_["sites"].as<JsonArray>();
-        for (size_t i = 0; i < sites.size(); ++i) if (domain == sites[i]["domain"].as<const char*>()) { sites.remove(i); break; }
+        if (!storeSite(domain, name, 0, true)) { failure(rpc, "storage_error", "Could not save deletion to SD"); return; }
         if (!commit()) { failure(rpc, "storage_error", "Could not save deletion to SD"); return; }
         success(rpc)["deleted"] = true; return;
     }
@@ -291,17 +347,13 @@ void Core::execute(JsonDocument& rpc) {
     if (!field(r, "html", INLINE_SITE_BYTES, html, rpc) || !field(r, "css", INLINE_SITE_BYTES, css, rpc) || !field(r, "js", INLINE_SITE_BYTES, js, rpc)) return;
     if (html.size() + css.size() + js.size() > INLINE_SITE_BYTES) { failure(rpc, "too_large", "Use chunk-v1 transfers for sites larger than 16 KiB; total site limit is 512 KiB"); return; }
     if (html.empty() || std::all_of(html.begin(), html.end(), [](unsigned char c) { return std::isspace(c); })) { failure(rpc, "empty_site", "HTML is required"); return; }
-    if (record.isNull()) {
-        size_t own = 0; for (JsonObjectConst s : state_["sites"].as<JsonArrayConst>()) if (name == s["owner"].as<const char*>()) ++own;
-        if (state_["sites"].size() >= MAX_SITES || own >= MAX_USER_SITES) { failure(rpc, "capacity", "Device or account site limit reached"); return; }
-    }
+    if (!spaceFor(html.size() + css.size() + js.size() + 16384)) { failure(rpc, "storage_full", "SD card is full; delete websites or free space on the card"); return; }
     uint64_t revision = state_["generation"].as<uint64_t>() + 1;
     std::string path = "/bww/sites/" + domain + "." + std::to_string(revision) + ".json";
     auto d = success(rpc); d["domain"] = domain; d["owner"] = name; d["revision"] = revision; d["updated"] = nullptr;
     d["html"] = html; d["css"] = css; d["js"] = js; rpc["digest"] = crypto_.jsonDigest(d);
     if (rpc.overflowed() || !storage_.writeJson(path, rpc)) { storage_.remove(path); failure(rpc, "storage_error", "Could not write the site to SD"); return; }
-    if (record.isNull()) record = state_["sites"].as<JsonArray>().createNestedObject();
-    record["domain"] = domain; record["owner"] = name; record["revision"] = revision;
+    if (!storeSite(domain, name, revision)) { storage_.remove(path); failure(rpc, "storage_error", "Could not update website catalog on SD"); return; }
     if (!commit()) { storage_.remove(path); failure(rpc, "storage_error", "Could not commit the site to SD"); return; }
     auto published = success(rpc); published["domain"] = domain; published["published"] = true;
 }

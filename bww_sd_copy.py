@@ -189,7 +189,9 @@ def state_ok(state):
         return False
     if not all(isinstance(state.get(k), list) for k in ('users', 'sessions', 'sites')) or json_memory(state) > 16384:
         return False
-    if len(state['users']) > 12 or len(state['sessions']) > 24 or len(state['sites']) > 24:
+    if len(state['users']) > 12 or len(state['sessions']) > 24:
+        return False
+    if state.get('siteCatalog') == 'paged-v1' and (not uint(state.get('catalogPages')) or state['sites']):
         return False
     users, domains = set(), set()
     for u in state['users']:
@@ -207,6 +209,41 @@ def state_ok(state):
     return True
 
 
+def catalog_page(bundle, root, number, generation):
+    versions = []
+    for slot in range(3):
+        path = safe_file(root, f'bww/catalog/{number}-{slot}.json')
+        proof = safe_file(root, f'bww/catalog/{number}-{slot}.json.ok')
+        if not proof.exists():
+            bundle.files[proof] = None
+            continue
+        checksum = bundle.read(proof, 64).decode('ascii')
+        page = bundle.read_json(path, 8192)
+        if (not isinstance(page, dict) or not uint(page.get('generation')) or not isinstance(page.get('sites'), list)
+                or len(page['sites']) > 8 or json_memory(page) > 2048 or checksum != digest(page)):
+            raise CopyError('Damaged SD website catalog page')
+        if page['generation'] <= generation:
+            versions.append((page['generation'], slot, page))
+    if not versions:
+        raise CopyError('Missing committed SD website catalog page')
+    return max(versions, key=lambda v: (v[0], -v[1]))
+
+
+def catalog_records(bundle, root, state):
+    if state.get('siteCatalog') != 'paged-v1':
+        return copy.deepcopy(state['sites'])
+    records = []
+    for i in range(state['catalogPages']):
+        records.extend(catalog_page(bundle, root, i, state['generation'])[2]['sites'])
+    names = set(); users = {u['name'] for u in state['users']}
+    for record in records:
+        if (not isinstance(record, dict) or not isinstance(record.get('domain'), str) or not DOMAIN.fullmatch(record['domain'])
+                or record['domain'] in names or record.get('owner') not in users or not uint(record.get('revision'))):
+            raise CopyError('Invalid SD website catalog record')
+        names.add(record['domain'])
+    return records
+
+
 def load_sd(root, allow_empty=False):
     bundle = Bundle(); candidates = []; any_slot = False
     for index in (0, 1):
@@ -217,7 +254,7 @@ def load_sd(root, allow_empty=False):
         any_slot = True
         try:
             state = bundle.read_json(path, 65536)
-            if state_ok(state) and all(safe_file(root, 'bww/sites/' + s['domain'] + '.' + str(s['revision']) + '.json').is_file() for s in state['sites']):
+            if state_ok(state) and all(safe_file(root, 'bww/sites/' + s['domain'] + '.' + str(s['revision']) + '.json').is_file() for s in catalog_records(bundle, root, state)):
                 candidates.append((state['generation'], index, state))
         except (CopyError, ValueError, TypeError, RecursionError):
             continue
@@ -230,7 +267,7 @@ def load_sd(root, allow_empty=False):
     if any_slot and len(candidates) < sum(v is not None for v in bundle.files.values()):
         bundle.notes.append('A damaged SD snapshot was ignored; the valid snapshot will be used.')
     bundle.users = {u['name']: dict(name=u['name'], salt=unhex(u['salt'],16).hex(), hash=unhex(u['hash'],32).hex()) for u in bundle.state['users']}
-    for record in bundle.state['sites']:
+    for record in catalog_records(bundle, root, bundle.state):
         domain = record['domain']; revision = record['revision']
         path = safe_file(root, 'bww/sites/' + domain + '.' + str(revision) + '.json')
         metadata = bundle.read_json(path, 131072)
@@ -331,15 +368,15 @@ def plan_copy(computer, sd, direction='to-sd'):
     counts = {}
     for site in merged.values():
         counts[site['owner']] = counts.get(site['owner'], 0) + 1
-    if direction == 'to-sd' and (len(dest.users) + len(added_users) > 12 or len(merged) > 24 or any(c > 8 for c in counts.values())):
-        raise CopyError('ESP32 limits exceeded: 12 accounts, 24 sites total, 8 sites per account')
+    if direction == 'to-sd' and len(dest.users) + len(added_users) > 12:
+        raise CopyError('ESP32 account limit exceeded: 12 accounts')
     if direction == 'to-computer' and (len(dest.users) + len(added_users) > 10000 or any(c > 50 for c in counts.values())):
         raise CopyError('Desktop account/site limits exceeded')
     return Plan(direction, computer, sd, source, dest, added_users, added_sites, updated, same)
 
 
-def check_unchanged(plan):
-    for path, expected in {**plan.source.files, **plan.destination.files}.items():
+def check_unchanged(plan, written=None):
+    for path, expected in {**plan.source.files, **plan.destination.files, **(written or {})}.items():
         if path.is_symlink() or (None if not path.exists() else sha(path.read_bytes())) != expected:
             raise CopyError('Data changed since preview. Stop both hosts and preview again.')
 
@@ -398,6 +435,7 @@ def chunks(text):
 
 def prepare_sd(plan):
     state = {k: copy.deepcopy(v) for k, v in plan.destination.state.items() if k != 'digest'}
+    state['sites'] = catalog_records(plan.destination, plan.sd, plan.destination.state)
     generation = state['generation'] + 1
     # A failed previous copy may have left an unreferenced generation. Never
     # overwrite it; choose a fresh generation so a safe retry can proceed.
@@ -428,6 +466,29 @@ def prepare_sd(plan):
         files['bww/sites/' + domain + '.' + str(generation) + '.json'] = arduino_json(metadata).encode('utf-8')
         state['sites'] = [s for s in state['sites'] if s['domain'] != domain]
         state['sites'].append(dict(domain=domain, owner=site['owner'], revision=generation))
+    # Write catalog pages to slots unreferenced by either committed snapshot.
+    previous = plan.destination.state
+    fallback = None
+    if plan.destination.active is not None:
+        other = safe_file(plan.sd, 'bww/state-' + str(1 - plan.destination.active) + '.json')
+        if other.exists():
+            try:
+                candidate = plan.destination.read_json(other, 65536)
+                if state_ok(candidate): fallback = candidate
+            except CopyError:
+                pass
+    records = state['sites']; count = (len(records) + 7) // 8
+    for number in range(count):
+        protected = set()
+        for snapshot in (previous, fallback):
+            if snapshot and snapshot.get('siteCatalog') == 'paged-v1' and number < snapshot['catalogPages']:
+                protected.add(catalog_page(plan.destination, plan.sd, number, snapshot['generation'])[1])
+        slot = next(i for i in range(3) if i not in protected)
+        page = dict(generation=generation, sites=records[number*8:(number+1)*8])
+        if json_memory(page) > 2048: raise CopyError('SD catalog page exceeds firmware memory capacity')
+        path = f'bww/catalog/{number}-{slot}.json'
+        files[path] = arduino_json(page).encode('utf-8'); files[path + '.ok'] = digest(page).encode('ascii')
+    state['sites'] = []; state['siteCatalog'] = 'paged-v1'; state['catalogPages'] = count; state['catalogRevision'] = generation
     state['digest'] = digest(state)
     if not state_ok(state):
         raise CopyError('Merged account/site metadata exceeds ESP32 storage limits')
@@ -471,11 +532,16 @@ def apply_copy(plan, backup_dir=None):
                 # New immutable site generations first; leave both old snapshots intact
                 # until the final commit. No cleanup/deletion of destination site data.
                 targets = [(safe_file(plan.sd, name), content) for name, content in files.items()]
-                if any(path.exists() for path, _ in targets):
+                if any(path.exists() for path, _ in targets if 'catalog' not in path.parts):
                     raise CopyError('A new site filename already exists; preview again')
+                needed = sum(len(content) + 4096 for _, content in targets) + 128 * 1024
+                if shutil.disk_usage(plan.sd).free < needed:
+                    raise CopyError('Not enough free SD card space for the copy and storage reserve')
                 for path, content in targets:
+                    if 'catalog' in path.parts and path.suffix == '.json':
+                        path.with_name(path.name + '.ok').unlink(missing_ok=True)
                     atomic_write(path, content)
-                check_unchanged(plan)
+                check_unchanged(plan, {path: sha(content) for path, content in targets})
                 encoded = arduino_json(state).encode('utf-8')
                 slot = 0 if plan.destination.active is None else 1 - plan.destination.active
                 atomic_write(safe_file(plan.sd, 'bww/state-' + str(slot) + '.json'), encoded)

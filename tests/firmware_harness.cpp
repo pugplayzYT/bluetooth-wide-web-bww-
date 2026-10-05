@@ -36,7 +36,7 @@ bool liveChunk(const void* pointer) {
     return false;
 }
 extern "C" void* __wrap_malloc(size_t bytes) {
-    bool tracked = bytes == STATE_CAPACITY || bytes == RPC_CAPACITY;
+    bool tracked = bytes == STATE_CAPACITY || bytes == RPC_CAPACITY || bytes == CATALOG_CAPACITY || bytes == 512;
     if (tracked && bytes > jsonLimit - jsonLive) { ++jsonRejected; return nullptr; }
     void* pointer = __real_malloc(bytes);
     if (tracked && pointer) {
@@ -54,7 +54,9 @@ extern "C" void __wrap_free(void* pointer) {
 class Disk : public Storage {
     std::filesystem::path root_;
 public:
-    bool failNextState = false;
+    bool failNextState = false; uint64_t availableBytes = uint64_t(32) * 1024 * 1024 * 1024;
+    uint64_t totalBytes() override { return uint64_t(32) * 1024 * 1024 * 1024; }
+    uint64_t freeBytes() override { return availableBytes; }
 #ifdef BWW_TRACK_JSON_ALLOCATIONS
     bool guardCommitChunk = false, fragmentedStateReads = false;
     const void* lastChunkBuffer = nullptr;
@@ -160,6 +162,7 @@ int main(int argc, char** argv) {
         if (!clean && !error) failure(rpc, "invalid_json", "Trailing data or incomplete frame");
         else if (error) failure(rpc, error == DeserializationError::NoMemory ? "too_large" : "invalid_json", "Invalid or oversized JSON request");
         else if (rpc["_test"] == "fail_next_state") { disk.failNextState = true; rpc.clear(); rpc["ok"] = true; rpc.createNestedObject("data"); }
+        else if (rpc["_test"] == "sd_space") { disk.availableBytes = rpc["bytes"]; rpc.clear(); rpc["ok"] = true; rpc.createNestedObject("data"); }
         else if (rpc["_test"] == "advance") { uint32_t seconds = rpc["seconds"]; bool ok = core.advance(seconds); rpc.clear(); rpc["ok"] = ok; rpc.createNestedObject("data"); }
 #ifdef BWW_TRACK_JSON_ALLOCATIONS
         else if (rpc["_test"] == "guard_commit_chunk") { disk.guardCommitChunk = true; rpc.clear(); rpc["ok"] = true; rpc.createNestedObject("data"); }

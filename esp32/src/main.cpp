@@ -24,6 +24,11 @@ bool fileMemoryReady(size_t newBufferBytes = 0) {
 }
 class SdStorage : public Storage {
 public:
+    uint64_t totalBytes() override { return SD.totalBytes(); }
+    uint64_t freeBytes() override {
+        uint64_t total = SD.totalBytes(), used = SD.usedBytes();
+        return total >= used ? total - used : 0;
+    }
     bool exists(const std::string& path) override { return SD.exists(path.c_str()); }
     bool mkdir(const std::string& path) override { return exists(path) || SD.mkdir(path.c_str()); }
     bool readJson(const std::string& path, JsonDocument& doc) override {
@@ -34,6 +39,8 @@ public:
     }
     bool writeJson(const std::string& path, const JsonDocument& doc) override {
         if (!fileMemoryReady()) return false;
+        uint64_t needed = measureJson(doc) + 4096;
+        if (freeBytes() < needed) return false;
         // Only inactive manifests or newly allocated site generations are replaced.
         if (exists(path) && !SD.remove(path.c_str())) return false;
         File file = SD.open(path.c_str(), FILE_WRITE); if (!file) return false;
@@ -42,6 +49,7 @@ public:
     }
     bool writeBytes(const std::string& path, const std::string& bytes) override {
         if (!fileMemoryReady()) return false;
+        if (freeBytes() < bytes.size() + 4096) return false;
         if (exists(path) && !SD.remove(path.c_str())) return false;
         File file = SD.open(path.c_str(), FILE_WRITE); if (!file) return false;
         size_t written = file.write(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
@@ -180,6 +188,9 @@ void setup() {
     if (rpc.capacity() != RPC_CAPACITY || !SD.begin(SD_CS, SPI, SD_FREQUENCY) || SD.cardType() == CARD_NONE || !core.begin()) {
         Serial.println("SD/storage initialization failed. Check wiring, FAT32, power, and /bww backups. No data is automatically formatted or reset."); return;
     }
+    Serial.printf("SD storage: usable=%llu bytes, free=%llu bytes, upload reserve=%llu bytes; website count uses SD space\n",
+        static_cast<unsigned long long>(disk.totalBytes()), static_cast<unsigned long long>(disk.freeBytes()),
+        static_cast<unsigned long long>(SD_RESERVE_BYTES));
     if (!bluetooth.begin("BWW-ESP32")) { Serial.println("Bluetooth startup stopped. See the preceding step/error; restart after correcting it."); return; }
     uint8_t key[32]; esp_fill_random(key, sizeof(key)); mbedtls_aes_init(&spoolCipher);
     int cipherResult = mbedtls_aes_setkey_enc(&spoolCipher, key, 256); memset(key, 0, sizeof(key));

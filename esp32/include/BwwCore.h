@@ -19,6 +19,8 @@ public:
     virtual bool remove(const std::string& path) = 0;
     // Stream entries; cleanup must not materialize an SD-sized directory in RAM.
     virtual bool visitFiles(const std::string& directory, const std::function<void(const std::string&)>& visitor) = 0;
+    virtual uint64_t totalBytes() = 0;
+    virtual uint64_t freeBytes() = 0;
 };
 class Crypto {
 public:
@@ -60,6 +62,10 @@ private:
     Storage& storage_;
     Crypto& crypto_;
     DynamicJsonDocument state_;
+    DynamicJsonDocument siteRecord_{512};
+    uint64_t backupGeneration_ = 0;
+    bool catalogError_ = false;
+    bool pageReadError_ = false;
     bool ready_ = false;
     int active_ = 0;
     uint64_t clock_ = 0, checkpoint_ = 0;
@@ -84,6 +90,15 @@ private:
     std::string identity(JsonObjectConst request);
     std::string sitePath(JsonObjectConst site) const;
     JsonObject site(const std::string& domain);
+    bool loadPage(size_t page, uint64_t generation, JsonDocument& doc, int* selected = nullptr);
+    bool writePage(size_t page, int slot, JsonDocument& doc);
+    bool visitSites(JsonDocument& snapshot, const std::function<void(JsonObjectConst)>& visitor);
+    bool storeSite(const std::string& domain, const std::string& owner, uint64_t revision, bool deleted = false);
+    bool migrateCatalog();
+    bool discardFuturePages(uint64_t generation);
+    bool lookupSite(JsonDocument& snapshot, const std::string& domain, JsonDocument& result);
+    bool writeLookup(const std::string& domain, size_t page);
+    bool spaceFor(uint64_t bytes);
     JsonObject user(const std::string& username);
 };
 void failure(JsonDocument& rpc, const char* code, const char* message);

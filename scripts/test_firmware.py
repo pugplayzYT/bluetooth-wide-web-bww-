@@ -23,7 +23,7 @@ with tempfile.TemporaryDirectory(prefix='bww-firmware-tests-') as temporary:
     subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror',
                     '-DBWW_TRACK_JSON_ALLOCATIONS', '-Wl,--wrap=malloc', '-Wl,--wrap=free',
                     '-I' + str(root / 'esp32/include'), '-I' + str(args.arduinojson),
-                    str(root / 'tests/firmware_harness.cpp'), str(root / 'esp32/src/BwwCore.cpp'), str(root / 'esp32/src/BwwTransfers.cpp'),
+                    str(root / 'tests/firmware_harness.cpp'), str(root / 'esp32/src/BwwCore.cpp'), str(root / 'esp32/src/BwwTransfers.cpp'), str(root / 'esp32/src/BwwCatalog.cpp'),
                     '-lcrypto', '-o', harness], check=True)
     subprocess.run([harness, '--crypto-check'], check=True)
     subprocess.run([harness, '--slots-check'], check=True)
