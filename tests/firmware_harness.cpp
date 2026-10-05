@@ -8,6 +8,28 @@
 #include <openssl/hmac.h>
 #include <openssl/rand.h>
 using namespace bww;
+#ifdef BWW_TRACK_JSON_ALLOCATIONS
+// Track actual ArduinoJson malloc calls without allocating inside the tracker.
+static struct { void* pointer; size_t bytes; } jsonAllocations[128] = {};
+static size_t jsonLive = 0, jsonPeak = 0, jsonLimit = SIZE_MAX, jsonRejected = 0;
+extern "C" void* __real_malloc(size_t);
+extern "C" void __real_free(void*);
+extern "C" void* __wrap_malloc(size_t bytes) {
+    bool tracked = bytes == STATE_CAPACITY || bytes == RPC_CAPACITY;
+    if (tracked && bytes > jsonLimit - jsonLive) { ++jsonRejected; return nullptr; }
+    void* pointer = __real_malloc(bytes);
+    if (tracked && pointer) {
+        for (auto& entry : jsonAllocations) if (!entry.pointer) {
+            entry = {pointer, bytes}; jsonLive += bytes; jsonPeak = std::max(jsonPeak, jsonLive); break;
+        }
+    }
+    return pointer;
+}
+extern "C" void __wrap_free(void* pointer) {
+    for (auto& entry : jsonAllocations) if (pointer && entry.pointer == pointer) { jsonLive -= entry.bytes; entry = {}; break; }
+    __real_free(pointer);
+}
+#endif
 class Disk : public Storage {
     std::filesystem::path root_;
 public:
@@ -36,10 +58,9 @@ public:
         file.read(bytes.data(), bytes.size()); return file.good();
     }
     bool remove(const std::string& name) override { std::error_code e; std::filesystem::remove(path(name), e); return !e; }
-    std::vector<std::string> files(const std::string& directory) override {
-        std::vector<std::string> result;
-        for (auto& p : std::filesystem::directory_iterator(path(directory))) if (p.is_regular_file()) result.push_back(directory + "/" + p.path().filename().string());
-        return result;
+    bool visitFiles(const std::string& directory, const std::function<void(const std::string&)>& visitor) override {
+        for (auto& p : std::filesystem::directory_iterator(path(directory))) if (p.is_regular_file()) visitor(directory + "/" + p.path().filename().string());
+        return true;
     }
 };
 class HashWriter {
@@ -99,6 +120,10 @@ int main(int argc, char** argv) {
         else if (error) failure(rpc, error == DeserializationError::NoMemory ? "too_large" : "invalid_json", "Invalid or oversized JSON request");
         else if (rpc["_test"] == "fail_next_state") { disk.failNextState = true; rpc.clear(); rpc["ok"] = true; rpc.createNestedObject("data"); }
         else if (rpc["_test"] == "advance") { uint32_t seconds = rpc["seconds"]; bool ok = core.advance(seconds); rpc.clear(); rpc["ok"] = ok; rpc.createNestedObject("data"); }
+#ifdef BWW_TRACK_JSON_ALLOCATIONS
+        else if (rpc["_test"] == "memory_budget") { jsonLimit = rpc["bytes"]; jsonPeak = jsonLive; jsonRejected = 0; rpc.clear(); rpc["ok"] = true; rpc.createNestedObject("data"); }
+        else if (rpc["_test"] == "memory_stats") { rpc.clear(); rpc["ok"] = true; auto data = rpc.createNestedObject("data"); data["live"] = jsonLive; data["peak"] = jsonPeak; data["rejected"] = jsonRejected; }
+#endif
         else core.execute(rpc);
         serializeJson(rpc, std::cout); std::cout << std::endl;
     }

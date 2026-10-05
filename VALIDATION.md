@@ -1,5 +1,13 @@
 # Validation
 
+## Firmware 0.5.1 cleanup allocation patch
+
+The pinned PlatformIO ESP32 target build passed using espressif32 6.9.0, Arduino ESP32 2.0.17, ArduinoJson 6.21.5 and the Xtensa 8.4.0 toolchain. Flash and static RAM fit the existing original-ESP32/huge-app layout. This cloud now has the target toolchain; historical build restrictions described below do not apply to this patch's build.
+
+All 19 portable firmware integration tests, 12 SD-copy tests and seven PC↔firmware sync tests passed, none skipped. The new cleanup regression tracks actual ArduinoJson malloc/free calls: repeated chunked publishes, reads and commits stay within 64 KiB of live JSON pools (40 KiB permanent + one 24 KiB temporary pool), with no rejected allocations. The original cleanup fails that same regression with 15 rejected allocations. That budget measures JSON pools, not total ESP32 heap. Additional regressions exercise 1,500 orphan chunks, live/staged chunk preservation, retained generations across restart, and unreadable metadata preventing deletion. The existing Bluetooth fake-SDK burst/startup, client-slot, HMAC/PBKDF2 and cooperation checks passed.
+
+The source ZIP and binary ZIP are verified against the patched sources/build outputs; the binary package includes its matching ELF and checksums. No physical ESP32/SD card is attached: the new heap guards, on-card streaming directory deletion, three-client radio timing and resolution of the reported crash still need hardware verification. Heap headroom checks reduce allocation risk; they cannot guarantee allocation under concurrent system activity or diagnose heap corruption. Existing data formats remain unchanged and no SD formatting or flash erase is part of the documented upgrade.
+
 ## Android 0.5.0 reconnect and persistent uploads
 
 The APK and instrumented test APK build passed. All 27 JVM tests passed with zero failures/errors/skips, including interrupted staging, lost commit replies without duplicate writes, destination/ownership conflicts, legacy-host replay restrictions and Unicode fingerprint compatibility. Lint passed with zero errors and only the existing reviewed JavaScript warning. The APK passed ZIP integrity checks and its v2 signature verified with the same development signing certificate as Android 0.4.2.

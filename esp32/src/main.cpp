@@ -2,6 +2,7 @@
 #include <SPI.h>
 #include <SD.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/sha256.h>
 #include "BwwCore.h"
@@ -10,16 +11,28 @@
 #include "PasswordHmac.h"
 using namespace bww;
 void pumpNetwork();
+void cooperateStorage();
+// Newlib may abort instead of returning nullptr when a file mutex cannot be
+// allocated. Leave headroom for stdio, the mutex and an 8 KiB chunk buffer.
+bool fileMemoryReady() {
+    const auto caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    size_t free = heap_caps_get_free_size(caps), largest = heap_caps_get_largest_free_block(caps);
+    if (free >= 16384 && largest >= 8192) return true;
+    Serial.printf("SD file operation deferred: low heap, free=%u largest=%u\n", static_cast<unsigned>(free), static_cast<unsigned>(largest));
+    return false;
+}
 class SdStorage : public Storage {
 public:
     bool exists(const std::string& path) override { return SD.exists(path.c_str()); }
     bool mkdir(const std::string& path) override { return exists(path) || SD.mkdir(path.c_str()); }
     bool readJson(const std::string& path, JsonDocument& doc) override {
+        if (!fileMemoryReady()) return false;
         doc.clear(); File file = SD.open(path.c_str(), FILE_READ);
         if (!file || file.isDirectory()) return false;
         auto result = deserializeJson(doc, file, DeserializationOption::NestingLimit(16)); file.close(); return !result;
     }
     bool writeJson(const std::string& path, const JsonDocument& doc) override {
+        if (!fileMemoryReady()) return false;
         // Only inactive manifests or newly allocated site generations are replaced.
         if (exists(path) && !SD.remove(path.c_str())) return false;
         File file = SD.open(path.c_str(), FILE_WRITE); if (!file) return false;
@@ -27,22 +40,33 @@ public:
         file.flush(); bool ok = written == expected && file.size() == expected; file.close(); return ok;
     }
     bool writeBytes(const std::string& path, const std::string& bytes) override {
+        if (!fileMemoryReady()) return false;
         if (exists(path) && !SD.remove(path.c_str())) return false;
         File file = SD.open(path.c_str(), FILE_WRITE); if (!file) return false;
         size_t written = file.write(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
         file.flush(); bool ok = written == bytes.size() && file.size() == bytes.size(); file.close(); return ok;
     }
     bool readBytes(const std::string& path, size_t maxBytes, std::string& bytes) override {
+        if (!fileMemoryReady()) return false;
         File file = SD.open(path.c_str(), FILE_READ);
         if (!file || file.isDirectory() || file.size() > maxBytes) return false;
         bytes.resize(file.size()); size_t read = file.read(reinterpret_cast<uint8_t*>(bytes.data()), bytes.size()); file.close(); return read == bytes.size();
     }
     bool remove(const std::string& path) override { return !exists(path) || SD.remove(path.c_str()); }
-    std::vector<std::string> files(const std::string& directory) override {
-        std::vector<std::string> result; File folder = SD.open(directory.c_str()); if (!folder) return result;
+    bool visitFiles(const std::string& directory, const std::function<void(const std::string&)>& visitor) override {
+        if (!fileMemoryReady()) return false;
+        File folder = SD.open(directory.c_str()); if (!folder || !folder.isDirectory()) return false;
         File file;
-        while ((file = folder.openNextFile())) { if (!file.isDirectory()) result.push_back(directory + "/" + std::string(file.name())); file.close(); }
-        folder.close(); return result;
+        while (true) {
+            if (!fileMemoryReady()) { folder.close(); return false; }
+            file = folder.openNextFile(); if (!file) break;
+            bool regular = !file.isDirectory();
+            std::string path = regular ? directory + "/" + std::string(file.name()) : "";
+            file.close(); // Release the file before the visitor removes it.
+            if (regular) visitor(path);
+            cooperateStorage();
+        }
+        folder.close(); return true;
     }
 };
 class ShaWriter {
@@ -94,6 +118,7 @@ bool initialized = false; uint32_t clockAt = 0; size_t nextClient = 0;
 mbedtls_aes_context spoolCipher;
 struct Incoming { uint8_t nonce[16] = {}, counter[16] = {}, streamBlock[16] = {}; size_t cipherOffset = 0; uint32_t handle = 0, started = 0; size_t bytes = 0; File file; bool ready = false, failed = false; };
 Incoming incoming[MAX_BT_CLIENTS];
+void cooperateStorage() { if (initialized) pumpNetwork(); yield(); }
 std::string requestPath(size_t index) { return "/bww/request-" + std::to_string(index) + ".enc"; }
 class SpoolInput {
     File& file_; uint8_t counter_[16], stream_[16] = {}, buffer_[512]; size_t offset_ = 0, used_ = 0, available_ = 0;
@@ -124,6 +149,7 @@ void pumpNetwork() {
         if (frame.started && millis() - frame.started > 120000) { frame.file.close(); frame.failed = true; bluetooth.disconnect(index, handle); continue; }
         if (!bluetooth.available(index)) continue;
         if (!frame.file) {
+            if (!fileMemoryReady()) { frame.failed = true; bluetooth.disconnect(index, handle); continue; }
             SD.remove(requestPath(index).c_str()); frame.file = SD.open(requestPath(index).c_str(), FILE_WRITE); frame.started = millis();
             esp_fill_random(frame.nonce, sizeof(frame.nonce)); memcpy(frame.counter, frame.nonce, sizeof(frame.counter));
             memset(frame.streamBlock, 0, sizeof(frame.streamBlock)); frame.cipherOffset = 0;
@@ -164,6 +190,7 @@ void loop() {
         size_t index = (nextClient + offset) % MAX_BT_CLIENTS;
         auto& pending = incoming[index]; if (!pending.ready) continue;
         uint32_t handle = pending.handle;
+        if (!fileMemoryReady()) { pending.ready = false; pending.failed = true; bluetooth.disconnect(index, pending.handle); continue; }
         File input = SD.open(requestPath(index).c_str(), FILE_READ);
         SpoolInput plaintext(input, pending.nonce); RequestFrame<SpoolInput> frame(plaintext);
         rpc.clear(); auto result = deserializeJson(rpc, frame, DeserializationOption::NestingLimit(16));

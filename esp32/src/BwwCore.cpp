@@ -4,10 +4,6 @@
 #include <set>
 namespace bww {
 namespace {
-const char* assets[] = {"html", "css", "js"};
-std::string chunkPath(const std::string& id, int asset, size_t index) {
-    return "/bww/sites/" + id + "." + assets[asset] + "." + std::to_string(index) + ".bin";
-}
 std::string slot(int number) { return "/bww/state-" + std::to_string(number) + ".json"; }
 std::string trimLower(std::string value) {
     auto space = [](unsigned char c) { return std::isspace(c); };
@@ -105,13 +101,16 @@ bool Core::begin() {
     ready_ = false; uploads_.clear();
     if (state_.capacity() != STATE_CAPACITY || !storage_.mkdir("/bww") || !storage_.mkdir("/bww/sites")) return false;
     bool any = storage_.exists(slot(0)) || storage_.exists(slot(1)), found = false; uint64_t best = 0;
-    DynamicJsonDocument candidate(STATE_CAPACITY);
-    for (int i = 0; i < 2; ++i) {
-        if (storage_.readJson(slot(i), candidate) && validState(candidate) && (!found || candidate["generation"].as<uint64_t>() > best)) {
-            if (!state_.set(candidate.as<JsonVariantConst>())) return false;
-            active_ = i; best = candidate["generation"].as<uint64_t>(); found = true;
+    {
+        DynamicJsonDocument candidate(STATE_CAPACITY);
+        if (candidate.capacity() != STATE_CAPACITY) return false;
+        for (int i = 0; i < 2; ++i) {
+            if (storage_.readJson(slot(i), candidate) && validState(candidate) && (!found || candidate["generation"].as<uint64_t>() > best)) {
+                if (!state_.set(candidate.as<JsonVariantConst>())) return false;
+                active_ = i; best = candidate["generation"].as<uint64_t>(); found = true;
+            }
         }
-    }
+    } // Release candidate before commit/cleanup.
     if (any && !found) return false; // Never silently reset a damaged account database.
     if (!found) {
         state_.clear(); state_["generation"] = uint64_t(0); state_["clock"] = uint64_t(0);
@@ -128,8 +127,10 @@ bool Core::commit() {
     int next = 1 - active_;
     bool written = digest.size() == 64 && !state_.overflowed() && storage_.writeJson(slot(next), state_);
     // Read back the checksum and manifest before acknowledging durable changes.
-    DynamicJsonDocument check(STATE_CAPACITY);
-    written = written && storage_.readJson(slot(next), check) && validState(check) && constantTimeEqual(digest, check["digest"].as<std::string>());
+    {
+        DynamicJsonDocument check(STATE_CAPACITY);
+        written = written && check.capacity() == STATE_CAPACITY && storage_.readJson(slot(next), check) && validState(check) && constantTimeEqual(digest, check["digest"].as<std::string>());
+    } // Release verification buffer before cleanup.
     if (!written) {
         storage_.remove(slot(next));
         if (!storage_.readJson(slot(active_), state_) || !validState(state_)) ready_ = false;
@@ -138,30 +139,45 @@ bool Core::commit() {
     active_ = next; checkpoint_ = clock_; pruneSites(); return true;
 }
 void Core::pruneSites() {
-    std::set<std::string> keep;
-    for (JsonObjectConst s : state_["sites"].as<JsonArrayConst>()) keep.insert(sitePath(s));
-    DynamicJsonDocument backup(STATE_CAPACITY);
-    if (storage_.readJson(slot(1 - active_), backup) && validState(backup))
-        for (JsonObjectConst s : backup["sites"].as<JsonArrayConst>()) keep.insert(sitePath(s));
-    bool pruneChunks = true;
-    DynamicJsonDocument metadata(RPC_CAPACITY);
-    std::vector<std::string> manifests(keep.begin(), keep.end());
-    for (const auto& path : manifests) {
-        if (!storage_.readJson(path, metadata)) { pruneChunks = false; continue; }
-        JsonObjectConst d = metadata["data"];
-        if (d["transferMode"] == "chunk-v1") {
-            if (!validChunks(d)) { pruneChunks = false; continue; }
-            std::string id = d["transfer"].as<std::string>();
-            for (int a = 0; a < 3; ++a) for (size_t i = 0; i < d["chunks"][assets[a]].size(); ++i) keep.insert(chunkPath(id, a, i));
+    // Bounds depend on site/upload limits, never the number of SD chunk files.
+    std::set<std::string> manifests, transfers;
+    for (JsonObjectConst site : state_["sites"].as<JsonArrayConst>()) manifests.insert(sitePath(site));
+    {
+        DynamicJsonDocument backup(STATE_CAPACITY);
+        if (backup.capacity() != STATE_CAPACITY) return;
+        const auto path = slot(1 - active_);
+        if (storage_.exists(path)) {
+            // An unreadable backup may still own chunks: skip all deletion.
+            if (!storage_.readJson(path, backup) || !validState(backup)) return;
+            for (JsonObjectConst site : backup["sites"].as<JsonArrayConst>()) manifests.insert(sitePath(site));
         }
     }
-    for (const auto& u : uploads_) for (int a = 0; a < 3; ++a) for (size_t i = 0; i < u.chunks[a].size(); ++i) keep.insert(chunkPath(u.id, a, i));
-    for (const auto& path : storage_.files("/bww/sites")) {
+    {
+        DynamicJsonDocument metadata(RPC_CAPACITY);
+        if (metadata.capacity() != RPC_CAPACITY) return;
+        for (const auto& path : manifests) {
+            if (!storage_.readJson(path, metadata)) return;
+            JsonObjectConst data = metadata["data"];
+            if (data["transferMode"] == "chunk-v1") {
+                if (!validChunks(data)) return;
+                transfers.insert(data["transfer"].as<std::string>());
+            }
+        }
+    } // Free metadata before opening the directory or any of its files.
+    for (const auto& upload : uploads_) transfers.insert(upload.id);
+    storage_.visitFiles("/bww/sites", [&](const std::string& path) {
         bool manifest = path.size() > 5 && path.substr(path.size() - 5) == ".json";
         bool chunk = path.size() > 4 && path.substr(path.size() - 4) == ".bin";
-        if (!keep.count(path) && (manifest || (chunk && pruneChunks))) storage_.remove(path);
-    }
+        if (manifest && !manifests.count(path)) storage_.remove(path);
+        if (chunk) {
+            const auto name = path.substr(path.find_last_of('/') + 1);
+            // Keep the entire live transfer namespace, including staged chunks.
+            const auto separator = name.find('.');
+            if (separator != std::string::npos && !transfers.count(name.substr(0, separator))) storage_.remove(path);
+        }
+    });
 }
+
 bool Core::advance(uint32_t seconds) {
     clock_ += seconds;
     auto before = uploads_.size();

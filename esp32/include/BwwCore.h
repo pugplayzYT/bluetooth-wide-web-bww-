@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <functional>
 #include "BwwConfig.h"
 namespace bww {
 class Storage {
@@ -16,7 +17,8 @@ public:
     virtual bool writeBytes(const std::string& path, const std::string& bytes) = 0;
     virtual bool readBytes(const std::string& path, size_t maxBytes, std::string& bytes) = 0;
     virtual bool remove(const std::string& path) = 0;
-    virtual std::vector<std::string> files(const std::string& directory) = 0;
+    // Stream entries; cleanup must not materialize an SD-sized directory in RAM.
+    virtual bool visitFiles(const std::string& directory, const std::function<void(const std::string&)>& visitor) = 0;
 };
 class Crypto {
 public:

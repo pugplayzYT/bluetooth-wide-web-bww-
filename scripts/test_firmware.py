@@ -21,6 +21,7 @@ subprocess.run(password_test, check=True)
 with tempfile.TemporaryDirectory(prefix='bww-firmware-tests-') as temporary:
     harness = str(Path(temporary) / 'firmware-harness')
     subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror',
+                    '-DBWW_TRACK_JSON_ALLOCATIONS', '-Wl,--wrap=malloc', '-Wl,--wrap=free',
                     '-I' + str(root / 'esp32/include'), '-I' + str(args.arduinojson),
                     str(root / 'tests/firmware_harness.cpp'), str(root / 'esp32/src/BwwCore.cpp'), str(root / 'esp32/src/BwwTransfers.cpp'),
                     '-lcrypto', '-o', harness], check=True)

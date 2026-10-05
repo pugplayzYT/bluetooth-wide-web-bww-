@@ -4,6 +4,10 @@ Publish a small HTML/CSS/JavaScript site on your computer and browse it from a p
 
 The project includes a Windows console server, a standalone ESP32 + SD card host, and a native Android browser/editor. See [the ESP32 setup and wiring guide](esp32/README.md) for the PlatformIO C++ firmware and your GPIO5/18/23/19 wiring. The server is the authority for accounts and domains. `bww://garden.bww` is unique **on that computer**, not globally across every Bluetooth server. Connect to another computer to explore its sites; accounts and sessions are separate on each computer.
 
+## ESP32 upload crash patch
+
+[Download ESP32 firmware 0.5.1 for PlatformIO](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-ESP32-PlatformIO-0.5.1.zip), extract it, open its `esp32` folder in VS Code, and click **Upload**. This patch reduces cleanup RAM use and checks memory headroom before opening SD files, addressing the observed upload-start allocation failure. Existing SD accounts/sites and the three-client/512 KiB defaults remain compatible. [Prebuilt binaries and matching crash-decoder ELF](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-ESP32-Binaries-0.5.1.zip) are also available. See [the firmware guide](esp32/README.md).
+
 ## Copy between your computer and ESP32 SD card
 
 For Bluetooth sync without removing the SD card, [download the Windows sync tool](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Windows-Sync-0.5.0.zip), update to [ESP32 firmware 0.5.0](esp32/README.md), and run **Sync-BWW.bat**. Select/pair the device, sign into the same username on both hosts, compare websites, choose directions, and approve the selected changes. See [the Bluetooth sync guide](SYNC_README.md).

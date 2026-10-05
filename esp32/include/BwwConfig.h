@@ -2,7 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 namespace bww {
-constexpr const char* FIRMWARE_VERSION = "0.5.0";
+constexpr const char* FIRMWARE_VERSION = "0.5.1";
 constexpr int SD_CS = 5, SD_SCK = 18, SD_MOSI = 23, SD_MISO = 19;
 constexpr uint32_t SD_FREQUENCY = 4000000;
 constexpr size_t MAX_BT_CLIENTS = 3;

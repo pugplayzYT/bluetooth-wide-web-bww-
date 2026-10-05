@@ -117,6 +117,51 @@ class FirmwareTests(unittest.TestCase):
         self.stop(); self.start()
         self.error('upload_missing','publish_commit',token=token,transfer=transfer)
         self.assertFalse(list((self.root/'bww/sites').glob('*.bin')))
+    def test_cleanup_uses_one_temporary_json_buffer_and_preserves_generations(self):
+        token = self.register()
+        self.control(_test='memory_budget', bytes=65536)
+        for generation in range(5):
+            self.chunked_site(token, domain='memory', html=('x' * 8192) * 4 + str(generation))
+            self.assertEqual(self.load_chunks('memory')['html'], ('x' * 8192) * 4 + str(generation))
+        stats = self.ok('unused', _test='memory_stats')
+        self.assertEqual(stats['rejected'], 0)
+        self.assertLessEqual(stats['peak'], 65536)
+        self.assertEqual(stats['live'], 40960)
+        # A reboot keeps current and fallback generations, and drops old ones.
+        self.stop(); self.start()
+        self.assertEqual(self.load_chunks('memory')['html'], ('x' * 8192) * 4 + '4')
+        self.assertEqual(len(list((self.root/'bww/sites').glob('*.json'))), 2)
+
+    def test_cleanup_streams_many_orphans_and_preserves_live_and_staged_chunks(self):
+        token = self.register()
+        self.chunked_site(token, domain='retained', html='keep me')
+        transfer = self.begin_upload(token, 'staged')
+        self.chunk(token, transfer, 'html', 0, 'unfinished')
+        directory = self.root/'bww/sites'
+        staged = directory / (transfer + '.html.0.bin')
+        for index in range(1500): (directory / ('0' * 32 + '.html.' + str(index) + '.bin')).write_text('orphan')
+        # Starting another upload runs cleanup while the first remains staged.
+        self.ok('register', username='bob', password='correct horse battery')
+        self.assertTrue(staged.exists())
+        self.assertFalse(list(directory.glob(('0' * 32) + '*.bin')))
+        self.assertEqual(self.load_chunks('retained')['html'], 'keep me')
+        self.ok('publish_commit', token=token, transfer=transfer)
+        self.assertEqual(self.load_chunks('staged')['html'], 'unfinished')
+
+    def test_cleanup_skips_deletion_when_retained_metadata_is_unreadable(self):
+        token = self.register()
+        self.chunked_site(token, html='keep me')
+        metadata = self.ok('get', domain='large')
+        path = self.root/'bww/sites'/('large.bww.' + str(metadata['revision']) + '.json')
+        original = path.read_bytes(); path.write_text('{broken')
+        orphan = self.root/'bww/sites'/('0' * 32 + '.html.0.bin'); orphan.write_text('keep until metadata readable')
+        self.begin_upload(token, 'another')
+        self.assertTrue(orphan.exists())
+        path.write_bytes(original)
+        self.begin_upload(token, 'another')
+        self.assertFalse(orphan.exists())
+        self.assertEqual(self.load_chunks('large')['html'], 'keep me')
+
     def test_wire_framing_rejects_trailing_json_and_recovers_on_next_line(self):
         for line in ['{bad json}', '{"op":"hello"} {"op":"list"}', '[]', '{"op":"hello"}garbage']:
             self.process.stdin.write(line+'\n'); self.process.stdin.flush()
