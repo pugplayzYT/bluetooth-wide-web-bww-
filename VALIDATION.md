@@ -1,5 +1,9 @@
 # Validation
 
+## Android dark mode 0.6.2
+
+Android 0.6.2 introduces an App Settings dialog with a dark mode toggle. Switching dark mode updates interface palettes dynamically (browser controls, system navigation/status bars, and code fields) and applies `setForceDark` to WebView on Android 10+ (API 29+). The setting is persisted in SharedPreferences across launches and activity recreation. Toggling occurs in-place without destroying the activity, preserving active Bluetooth SPP sockets, loaded web content, and drafts.
+
 ## Android background uploads 0.6.1
 
 The connected-device foreground upload service renews its non-reference-counted CPU wake lock every minute, with a ten-minute fallback timeout, through transfers and reconnect waits. Shutdown removes the heartbeat and releases the lock. The manifest explicitly retains the service when the activity task is removed. Upload notifications explain slow transfers, report acknowledged chunk bytes, and distinguish final saving/verification. The browser socket remains separate from the service socket; no host or SD-format update is included.
