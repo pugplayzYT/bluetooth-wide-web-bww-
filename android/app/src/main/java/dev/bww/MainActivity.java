@@ -7,6 +7,10 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.PorterDuff;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.InsetDrawable;
 import android.net.Uri;
 import android.os.*;
 import android.text.*;
@@ -447,10 +451,49 @@ public class MainActivity extends Activity {
             }).setNegativeButton("Close", null).show();
         } catch (Exception e) { notice(e.getMessage()); }
     }
+    private Drawable dialogBackgroundDrawable() {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(16));
+        bg.setColor(isDarkMode() ? Color.rgb(26, 36, 33) : Color.rgb(255, 255, 255));
+        bg.setStroke(dp(1), isDarkMode() ? Color.rgb(45, 60, 55) : Color.rgb(215, 226, 221));
+        return new InsetDrawable(bg, dp(20), dp(24), dp(20), dp(24));
+    }
+    private void updateSwitchStyle(Switch s) {
+        boolean dark = isDarkMode();
+        s.setSplitTrack(false);
+        int[][] states = new int[][]{
+            new int[]{android.R.attr.state_checked},
+            new int[]{}
+        };
+        int[] thumbColors = new int[]{
+            dark ? Color.rgb(88, 191, 168) : Color.rgb(23, 107, 91),
+            dark ? Color.rgb(180, 195, 190) : Color.rgb(105, 125, 118)
+        };
+        int[] trackColors = new int[]{
+            dark ? Color.rgb(38, 92, 80) : Color.rgb(130, 186, 172),
+            dark ? Color.rgb(55, 72, 67) : Color.rgb(175, 192, 186)
+        };
+        s.setThumbTintList(new ColorStateList(states, thumbColors));
+        s.setTrackTintList(new ColorStateList(states, trackColors));
+        s.setTrackTintMode(PorterDuff.Mode.SRC_OVER);
+    }
     private void settingsDialog() {
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
-        form.setPadding(dp(20), dp(12), dp(20), dp(12));
+        form.setPadding(dp(20), dp(6), dp(20), dp(16));
+
+        TextView titleView = text(getString(R.string.app_settings), 20);
+        titleView.setTypeface(null, android.graphics.Typeface.BOLD);
+        titleView.setTextColor(textColor());
+        titleView.setPadding(dp(24), dp(20), dp(24), dp(4));
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(10), dp(14), dp(10));
+        GradientDrawable cardBg = new GradientDrawable();
+        cardBg.setCornerRadius(dp(12));
+        cardBg.setColor(isDarkMode() ? Color.rgb(34, 46, 42) : Color.rgb(240, 245, 243));
+        card.setBackground(cardBg);
 
         Switch darkSwitch = new Switch(this);
         darkSwitch.setId(R.id.dark_mode_toggle);
@@ -458,30 +501,47 @@ public class MainActivity extends Activity {
         darkSwitch.setTextSize(15);
         darkSwitch.setTextColor(textColor());
         darkSwitch.setChecked(isDarkMode());
-        darkSwitch.setPadding(0, dp(8), 0, dp(4));
+        darkSwitch.setPadding(0, dp(4), 0, dp(4));
+        updateSwitchStyle(darkSwitch);
 
         TextView hint = text(getString(R.string.dark_mode_hint), 12);
         hint.setTextColor(mutedColor());
-        hint.setPadding(0, 0, 0, dp(8));
+        hint.setPadding(0, 0, 0, dp(4));
 
-        form.addView(darkSwitch);
-        form.addView(hint);
+        card.addView(darkSwitch);
+        card.addView(hint);
+        form.addView(card);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
-            .setTitle(R.string.app_settings)
+            .setCustomTitle(titleView)
             .setView(form)
             .setPositiveButton("Close", null)
             .create();
+
+        Runnable updateDialogStyle = () -> {
+            if (dialog.getWindow() != null) {
+                dialog.getWindow().setBackgroundDrawable(dialogBackgroundDrawable());
+            }
+            titleView.setTextColor(textColor());
+            cardBg.setColor(isDarkMode() ? Color.rgb(34, 46, 42) : Color.rgb(240, 245, 243));
+            darkSwitch.setTextColor(textColor());
+            updateSwitchStyle(darkSwitch);
+            hint.setTextColor(mutedColor());
+            Button closeBtn = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            if (closeBtn != null) {
+                closeBtn.setTextColor(accentColor());
+            }
+        };
 
         darkSwitch.setOnCheckedChangeListener((btn, isChecked) -> {
             if (isChecked != isDarkMode()) {
                 setDarkMode(isChecked);
                 applyThemeMode();
-                darkSwitch.setTextColor(textColor());
-                hint.setTextColor(mutedColor());
+                updateDialogStyle.run();
             }
         });
 
+        dialog.setOnShowListener(d -> updateDialogStyle.run());
         dialog.show();
     }
     private void applyThemeMode() {

@@ -1,5 +1,9 @@
 # Validation
 
+## Android Settings UI and dark mode fixes 0.6.3
+
+Android 0.6.3 fixes App Settings dialog theming when toggling dark mode live. The dialog window background updates dynamically between light (#FFFFFF) and dark (#1A2421) with rounded insets and subtle stroke borders. The dialog custom title and action buttons update in real time. The toggle switch receives high-contrast stateful track and thumb tints with disabled split-track, ensuring the switch track pill is clearly visible in both light and dark mode.
+
 ## Android dark mode 0.6.2
 
 Android 0.6.2 introduces an App Settings dialog with a dark mode toggle. Switching dark mode updates interface palettes dynamically (browser controls, system navigation/status bars, and code fields) and applies `setForceDark` to WebView on Android 10+ (API 29+). The setting is persisted in SharedPreferences across launches and activity recreation. Toggling occurs in-place without destroying the activity, preserving active Bluetooth SPP sockets, loaded web content, and drafts.
