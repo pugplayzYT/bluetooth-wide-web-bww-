@@ -1,7 +1,8 @@
 name: Build and test
 on: [push, pull_request, workflow_dispatch]
 permissions:
-  contents: read
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -30,6 +31,8 @@ jobs:
         run: ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug
       - name: Package Windows server
         run: dotnet publish server -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:NuGetLockFilePath=obj/packages.publish.lock.json -o artifacts/windows-x64
+      - name: Package build downloads
+        run: python3 scripts/package_downloads.py
       - uses: actions/upload-artifact@v4
         with:
           name: Bww-Windows-x64
@@ -38,6 +41,11 @@ jobs:
         with:
           name: Bww-Android-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: downloads-build
+          path: downloads/
+
   firmware:
     runs-on: ubuntu-latest
     steps:
@@ -60,6 +68,8 @@ jobs:
           dotnet restore server --locked-mode
           dotnet build server -c Release --no-restore
           python3 scripts/test_firmware.py
+      - name: Package firmware downloads
+        run: python3 scripts/package_firmware.py
       - uses: actions/upload-artifact@v4
         with:
           name: Bww-ESP32-binaries
@@ -68,3 +78,42 @@ jobs:
             esp32/.pio/build/esp32dev/bootloader.bin
             esp32/.pio/build/esp32dev/partitions.bin
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: downloads-firmware
+          path: downloads/
+
+  publish-downloads:
+    needs: [build, firmware]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/download-artifact@v4
+        with:
+          name: downloads-build
+          path: downloads
+      - uses: actions/download-artifact@v4
+        with:
+          name: downloads-firmware
+          path: downloads
+      - name: Update SHA256SUMS and commit release downloads
+        run: |
+          python3 -c "
+          import hashlib, pathlib
+          d = pathlib.Path('downloads')
+          pkgs = sorted([*d.glob('*.zip'), *d.glob('*.apk')])
+          (d / 'SHA256SUMS.txt').write_text(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in pkgs))
+          "
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add downloads/
+          if ! git diff --staged --quiet; then
+            git commit -m "Update release downloads in downloads/ [skip ci]"
+            git pull --rebase origin main
+            git push origin main
+          else
+            echo "No downloads changes to commit."
+          fi
