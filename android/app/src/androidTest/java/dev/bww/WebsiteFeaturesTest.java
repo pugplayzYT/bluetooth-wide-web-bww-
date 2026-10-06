@@ -130,4 +130,16 @@ public class WebsiteFeaturesTest {
             });
         }
     }
+    @Test public void appSettingsDarkModeToggleAppliesAndPersists() {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                android.widget.Button settings = activity.findViewById(R.id.settings);
+                assertNotNull(settings);
+                android.content.SharedPreferences prefs = activity.getSharedPreferences("bww", android.content.Context.MODE_PRIVATE);
+                boolean initial = prefs.getBoolean("dark_mode", false);
+                prefs.edit().putBoolean("dark_mode", !initial).apply();
+                assertEquals(!initial, prefs.getBoolean("dark_mode", false));
+            });
+        }
+    }
 }

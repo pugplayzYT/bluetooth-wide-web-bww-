@@ -5,6 +5,7 @@ import android.app.*;
 import android.bluetooth.*;
 import android.content.*;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.*;
@@ -22,9 +23,10 @@ public class MainActivity extends Activity {
     private final BwwConnection connection = new BwwConnection();
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Map<String, JSONObject> pages = new ConcurrentHashMap<>();
+    private final List<Button> buttons = new ArrayList<>();
     private SharedPreferences prefs;
     private String server = "", serverName = "", token = "", username = "";
-    private TextView status, account;
+    private TextView status, account, title, subtitle;
     private EditText address;
     private WebView web;
     private LinearLayout root, chrome;
@@ -49,7 +51,23 @@ public class MainActivity extends Activity {
     };
 
     interface Job { void run() throws Exception; }
+    private boolean isDarkMode() { return prefs != null && prefs.getBoolean("dark_mode", false); }
+    private void setDarkMode(boolean enabled) { if (prefs != null) prefs.edit().putBoolean("dark_mode", enabled).apply(); }
+    private int bgColor() { return isDarkMode() ? Color.rgb(18, 24, 22) : Color.rgb(244, 247, 245); }
+    private int textColor() { return isDarkMode() ? Color.rgb(228, 233, 230) : Color.rgb(23, 62, 53); }
+    private int mutedColor() { return isDarkMode() ? Color.rgb(160, 180, 172) : Color.rgb(70, 95, 88); }
+    private int buttonBgColor() { return isDarkMode() ? Color.rgb(36, 48, 44) : Color.rgb(225, 233, 230); }
+    private int accentColor() { return isDarkMode() ? Color.rgb(88, 191, 168) : Color.rgb(23, 107, 91); }
+    private String welcomeHtml() {
+        boolean dark = isDarkMode();
+        String bg = dark ? "#121816" : "#f4f7f5";
+        String fg = dark ? "#e4e9e6" : "#173e35";
+        return "<html><meta name='viewport' content='width=device-width'><body style='font-family:sans-serif;padding:24px;background:" + bg + ";color:" + fg + "'><h1>Welcome to your nearby web.</h1><p>1. Start BWW on your Windows computer.</p><p>2. Pair your phone with the computer.</p><p>3. Tap Connect and choose it.</p><p>Browse sites, or sign in to publish your own HTML, CSS, and JavaScript.</p></body></html>";
+    }
+
     @Override public void onCreate(Bundle state) {
+        prefs = getSharedPreferences("bww", MODE_PRIVATE);
+        if (isDarkMode()) setTheme(R.style.AppTheme_Dark);
         super.onCreate(state);
         fullScreenGesture = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onDown(MotionEvent event) { return true; }
@@ -61,12 +79,11 @@ public class MainActivity extends Activity {
                 return false;
             }
         });
-        prefs = getSharedPreferences("bww", MODE_PRIVATE);
         connection.progress = message -> ui(() -> status.setText(message));
         androidx.core.content.ContextCompat.registerReceiver(this, uploadReceiver,
             new IntentFilter(PublishService.CHANGED), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED);
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(10), dp(16), 0); root.setBackgroundColor(Color.rgb(244,247,245));
+        root.setPadding(dp(16), dp(10), dp(16), 0); root.setBackgroundColor(bgColor());
         chrome = new LinearLayout(this); chrome.setOrientation(LinearLayout.VERTICAL);
         chrome.setId(R.id.browser_controls); root.addView(chrome);
         root.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -74,9 +91,9 @@ public class MainActivity extends Activity {
             updateBrowserPadding();
             return insets;
         });
-        TextView title = text("Bluetooth-wide Web", 24); title.setTypeface(null, android.graphics.Typeface.BOLD); chrome.addView(title);
-        chrome.addView(text("A little web, right around you.", 14));
-        status = text("Pair your computer in Bluetooth settings, then connect.", 13); chrome.addView(status);
+        title = text("Bluetooth-wide Web", 24); title.setTypeface(null, android.graphics.Typeface.BOLD); chrome.addView(title);
+        subtitle = text("A little web, right around you.", 14); subtitle.setTextColor(mutedColor()); chrome.addView(subtitle);
+        status = text("Pair your computer in Bluetooth settings, then connect.", 13); status.setTextColor(mutedColor()); chrome.addView(status);
         operationProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         operationProgress.setIndeterminate(true); operationProgress.setVisibility(View.GONE); chrome.addView(operationProgress);
         LinearLayout toolbar = row();
@@ -84,20 +101,29 @@ public class MainActivity extends Activity {
         toolbar.addView(button("Sites", v -> listSites(false)));
         toolbar.addView(button("Account", v -> accountDialog())); chrome.addView(toolbar);
         toolbar.addView(button("Uploads", v -> uploadsDialog()));
-        account = text("Browsing as a guest", 13); chrome.addView(account);
+        account = text("Browsing as a guest", 13); account.setTextColor(mutedColor()); chrome.addView(account);
         LinearLayout url = row(); address = new EditText(this); address.setSingleLine(true);
         address.setHint("bww://my-site.bww"); address.setInputType(17);
+        address.setTextColor(textColor()); address.setHintTextColor(mutedColor());
+        address.setBackgroundTintList(ColorStateList.valueOf(accentColor()));
         url.addView(address, new LinearLayout.LayoutParams(0, -2, 1));
         url.addView(button("Go", v -> browse(address.getText().toString()))); chrome.addView(url);
         address.setOnEditorActionListener((v, action, event) -> { browse(address.getText().toString()); return true; });
         LinearLayout author = row(); author.addView(button("Create Site", v -> editor(null)));
         author.addView(button("My Sites", v -> listSites(true)));
         Button expand = button(getString(R.string.full_screen), v -> setFullScreen(true));
-        expand.setId(R.id.full_screen); author.addView(expand); chrome.addView(author);
+        expand.setId(R.id.full_screen); author.addView(expand);
+        Button settingsBtn = button(getString(R.string.settings), v -> settingsDialog());
+        settingsBtn.setId(R.id.settings); author.addView(settingsBtn);
+        chrome.addView(author);
         web = new WebView(this); web.setId(R.id.site_webview);
+        web.setBackgroundColor(bgColor());
         WebSettings settings = web.getSettings(); settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false); settings.setAllowContentAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        if (Build.VERSION.SDK_INT >= 29) {
+            settings.setForceDark(isDarkMode() ? WebSettings.FORCE_DARK_ON : WebSettings.FORCE_DARK_OFF);
+        }
         settings.setJavaScriptCanOpenWindowsAutomatically(false); settings.setSupportMultipleWindows(false);
         settings.setMediaPlaybackRequiresUserGesture(true);
         CookieManager.getInstance().setAcceptCookie(false);
@@ -132,14 +158,29 @@ public class MainActivity extends Activity {
         FrameLayout screen = new FrameLayout(this); screen.addView(root, new FrameLayout.LayoutParams(-1, -1));
         setContentView(screen);
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
-        web.loadDataWithBaseURL("https://welcome.bww/", "<html><meta name='viewport' content='width=device-width'><body style='font-family:sans-serif;padding:24px;color:#173e35'><h1>Welcome to your nearby web.</h1><p>1. Start BWW on your Windows computer.</p><p>2. Pair your phone with the computer.</p><p>3. Tap Connect and choose it.</p><p>Browse sites, or sign in to publish your own HTML, CSS, and JavaScript.</p></body></html>", "text/html", "UTF-8", null);
+        web.loadDataWithBaseURL("https://welcome.bww/", welcomeHtml(), "text/html", "UTF-8", null);
+        applySystemBars();
         try { if (!PublishQueue.pending(this).isEmpty() && (Build.VERSION.SDK_INT < 31 || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED)) PublishService.start(this); }
         catch (Exception e) { notice("Could not resume uploads: " + e.getMessage()); }
     }
     private int dp(int n) { return (int)(getResources().getDisplayMetrics().density * n); }
-    private TextView text(String value, int size) { TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(Color.rgb(23,62,53)); t.setPadding(0, dp(4), 0, dp(4)); return t; }
+    private TextView text(String value, int size) { TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(textColor()); t.setPadding(0, dp(4), 0, dp(4)); return t; }
     private LinearLayout row() { LinearLayout r = new LinearLayout(this); r.setOrientation(LinearLayout.HORIZONTAL); return r; }
-    private Button button(String value, View.OnClickListener action) { Button b = new Button(this); b.setText(value); b.setTextSize(12); b.setOnClickListener(action); return b; }
+    private Button button(String value, View.OnClickListener action) {
+        Button b = new Button(this);
+        b.setText(value);
+        b.setTextSize(12);
+        b.setPadding(dp(8), dp(4), dp(8), dp(4));
+        b.setMinimumWidth(0);
+        b.setOnClickListener(action);
+        buttons.add(b);
+        updateButtonStyle(b);
+        return b;
+    }
+    private void updateButtonStyle(Button b) {
+        b.setTextColor(textColor());
+        b.setBackgroundTintList(ColorStateList.valueOf(buttonBgColor()));
+    }
     private void notice(String value) { runOnUiThread(() -> Toast.makeText(this, value, Toast.LENGTH_LONG).show()); }
     private void ui(Runnable action) { runOnUiThread(() -> { if (!isFinishing() && !isDestroyed()) action.run(); }); }
     private void task(String label, Job job) {
@@ -406,9 +447,78 @@ public class MainActivity extends Activity {
             }).setNegativeButton("Close", null).show();
         } catch (Exception e) { notice(e.getMessage()); }
     }
+    private void settingsDialog() {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(12), dp(20), dp(12));
+
+        Switch darkSwitch = new Switch(this);
+        darkSwitch.setId(R.id.dark_mode_toggle);
+        darkSwitch.setText(getString(R.string.dark_mode));
+        darkSwitch.setTextSize(15);
+        darkSwitch.setTextColor(textColor());
+        darkSwitch.setChecked(isDarkMode());
+        darkSwitch.setPadding(0, dp(8), 0, dp(4));
+
+        TextView hint = text(getString(R.string.dark_mode_hint), 12);
+        hint.setTextColor(mutedColor());
+        hint.setPadding(0, 0, 0, dp(8));
+
+        form.addView(darkSwitch);
+        form.addView(hint);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setTitle(R.string.app_settings)
+            .setView(form)
+            .setPositiveButton("Close", null)
+            .create();
+
+        darkSwitch.setOnCheckedChangeListener((btn, isChecked) -> {
+            if (isChecked != isDarkMode()) {
+                setDarkMode(isChecked);
+                applyThemeMode();
+                darkSwitch.setTextColor(textColor());
+                hint.setTextColor(mutedColor());
+            }
+        });
+
+        dialog.show();
+    }
+    private void applyThemeMode() {
+        boolean dark = isDarkMode();
+        setTheme(dark ? R.style.AppTheme_Dark : R.style.AppTheme);
+        if (root != null) root.setBackgroundColor(bgColor());
+        if (title != null) title.setTextColor(textColor());
+        if (subtitle != null) subtitle.setTextColor(mutedColor());
+        if (status != null) status.setTextColor(mutedColor());
+        if (account != null) account.setTextColor(mutedColor());
+        if (address != null) {
+            address.setTextColor(textColor());
+            address.setHintTextColor(mutedColor());
+            address.setBackgroundTintList(ColorStateList.valueOf(accentColor()));
+        }
+        for (Button b : buttons) updateButtonStyle(b);
+        if (web != null) {
+            web.setBackgroundColor(bgColor());
+            if (Build.VERSION.SDK_INT >= 29) {
+                web.getSettings().setForceDark(dark ? WebSettings.FORCE_DARK_ON : WebSettings.FORCE_DARK_OFF);
+            }
+            String currentUrl = web.getUrl();
+            if (currentUrl == null || currentUrl.contains("welcome.bww") || "about:blank".equals(currentUrl)) {
+                web.loadDataWithBaseURL("https://welcome.bww/", welcomeHtml(), "text/html", "UTF-8", null);
+            }
+        }
+        applySystemBars();
+    }
     private EditText codeField(LinearLayout form, String label, int lines) {
         form.addView(text(label, 14)); EditText field = new EditText(this); field.setTypeface(android.graphics.Typeface.MONOSPACE); field.setTextSize(13);
-        field.setInputType(1 | 131072 | 524288); field.setGravity(Gravity.TOP); field.setMinLines(lines); form.addView(field); return field;
+        field.setInputType(1 | 131072 | 524288); field.setGravity(Gravity.TOP); field.setMinLines(lines);
+        field.setTextColor(textColor()); field.setHintTextColor(mutedColor());
+        if (isDarkMode()) {
+            field.setBackgroundColor(Color.rgb(26, 36, 33));
+            field.setPadding(dp(8), dp(8), dp(8), dp(8));
+        }
+        form.addView(field); return field;
     }
     @Override public void onBackPressed() { handleBack(); }
     private void handleBack() {
@@ -444,17 +554,29 @@ public class MainActivity extends Activity {
         root.requestApplyInsets();
     }
     private void applySystemBars() {
+        boolean dark = isDarkMode();
+        getWindow().setStatusBarColor(dark ? Color.rgb(18, 24, 22) : Color.rgb(244, 247, 245));
+        getWindow().setNavigationBarColor(dark ? Color.rgb(18, 24, 22) : Color.rgb(244, 247, 245));
         if (Build.VERSION.SDK_INT >= 30) {
             WindowInsetsController controller = getWindow().getInsetsController();
             if (controller != null) {
                 controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
                 if (fullScreen) controller.hide(WindowInsets.Type.systemBars());
-                else controller.show(WindowInsets.Type.systemBars());
+                else {
+                    controller.show(WindowInsets.Type.systemBars());
+                    int lightFlags = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                    controller.setSystemBarsAppearance(dark ? 0 : lightFlags, lightFlags);
+                }
             }
         } else {
-            getWindow().getDecorView().setSystemUiVisibility(fullScreen
+            int flags = fullScreen
                 ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                : View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+                : View.SYSTEM_UI_FLAG_LAYOUT_STABLE;
+            if (!fullScreen && !dark) {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                if (Build.VERSION.SDK_INT >= 26) flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            }
+            getWindow().getDecorView().setSystemUiVisibility(flags);
         }
     }
     private void hideCustomView() {
@@ -506,5 +628,5 @@ public class MainActivity extends Activity {
         return super.onKeyUp(keyCode, event);
     }
     @Override public void onWindowFocusChanged(boolean focused) { super.onWindowFocusChanged(focused); if (focused && fullScreen) applySystemBars(); }
-    @Override public void onDestroy() { unregisterReceiver(uploadReceiver); hideCustomView(); if (fullScreenHint != null) fullScreenHint.cancel(); connection.close(); worker.shutdownNow(); web.destroy(); super.onDestroy(); }
+    @Override public void onDestroy() { unregisterReceiver(uploadReceiver); hideCustomView(); if (fullScreenHint != null) fullScreenHint.cancel(); buttons.clear(); connection.close(); worker.shutdownNow(); web.destroy(); super.onDestroy(); }
 }

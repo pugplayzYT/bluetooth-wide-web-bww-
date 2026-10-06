@@ -10,4 +10,8 @@
     <string name="full_screen_hint">Swipe down from top to exit full screen</string>
     <string name="editor_limits">Drafts save on this phone. Published sites save on the connected server. Limit: %1$d KiB total. Only index.html, style.css and script.js; no external network resources.</string>
     <string name="site_too_large">This server allows %1$d KiB per site. Reduce the HTML, CSS, or JavaScript.</string>
+    <string name="settings">Settings</string>
+    <string name="app_settings">App Settings</string>
+    <string name="dark_mode">Dark mode</string>
+    <string name="dark_mode_hint">Use dark appearance for app controls</string>
 </resources>

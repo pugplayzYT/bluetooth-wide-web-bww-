@@ -3,4 +3,6 @@
     <item name="site_webview" type="id"/>
     <item name="full_screen" type="id"/>
     <item name="authentication_progress" type="id"/>
+    <item name="settings" type="id"/>
+    <item name="dark_mode_toggle" type="id"/>
 </resources>
