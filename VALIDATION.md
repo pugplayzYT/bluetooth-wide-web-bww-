@@ -1,5 +1,11 @@
 # Validation
 
+## Android background uploads 0.6.1
+
+The connected-device foreground upload service renews its non-reference-counted CPU wake lock every minute, with a ten-minute fallback timeout, through transfers and reconnect waits. Shutdown removes the heartbeat and releases the lock. The manifest explicitly retains the service when the activity task is removed. Upload notifications explain slow transfers, report acknowledged chunk bytes, and distinguish final saving/verification. The browser socket remains separate from the service socket; no host or SD-format update is included.
+
+The Android APK and instrumentation APK built, all **27 JVM tests** passed, and lint passed without a wake-lock timeout warning. All seven PC wire-protocol compatibility tests passed. The APK signature matches the previous Android 0.6.0 download, allowing an in-place update preserving data; download SHA-256 sums were regenerated. Physical Bluetooth, screen-off/Doze, task dismissal and multi-hour uploads have not been tested in this cloud environment. Force-stop and manufacturer battery restrictions can still interrupt the service; saved jobs resume when BWW is reopened.
+
 ## Activity LED 0.6.2
 
 The original ESP32 target builds with a GPIO2 activity indicator. A native simulation of the actual LED implementation verified idle off, a visible pulse, continuous flashing during repeated traffic, return to off within four 80 ms timer ticks, active-high/active-low wiring and timer-creation failure. The existing fake-SDK Bluetooth adapter checks passed for secure three-client startup, thirteen failure diagnostics, lossless interleaved receive bursts and bounded stalled-reader handling. These checks do not establish physical LED wiring on every ESP32 board. No Android, Windows, SD format or quota change is included.

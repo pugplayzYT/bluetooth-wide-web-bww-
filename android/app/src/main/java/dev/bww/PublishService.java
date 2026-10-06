@@ -20,17 +20,34 @@ public final class PublishService extends Service {
     private boolean running;
     private volatile int latestStart;
     private PowerManager.WakeLock wakeLock;
+    private final Handler wakeHandler = new Handler(Looper.getMainLooper());
+    private final Runnable renewWakeLock = new Runnable() {
+        @Override public void run() {
+            // Renewal keeps arbitrarily long uploads awake, with a safety
+            // timeout if the service stops scheduling its heartbeat.
+            wakeLock.acquire(10 * 60 * 1000L);
+            wakeHandler.postDelayed(this, 60 * 1000L);
+        }
+    };
     private boolean completed;
     static void start(Context context) { context.startForegroundService(new Intent(context, PublishService.class)); }
     @Override public void onCreate() {
         super.onCreate(); getSystemService(NotificationManager.class).createNotificationChannel(new NotificationChannel(CHANNEL, "Website uploads", NotificationManager.IMPORTANCE_LOW));
         wakeLock = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "dev.bww:publish");
+        wakeLock.setReferenceCounted(false);
         startForeground(NOTIFICATION, notification("Preparing queued uploads", null, true));
+        // Scope CPU wakefulness to this foreground service, not a ten-minute
+        // attempt. Long transfers and reconnect backoff must survive screen-off.
+        renewWakeLock.run();
+        connection.progress = message -> notifyStatus(message, currentId.isEmpty() ? null : currentId, true);
     }
     private Notification notification(String message, String id, boolean active) {
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder builder = new Notification.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_bww).setContentTitle("BWW website uploads").setContentText(message)
-            .setStyle(new Notification.BigTextStyle().bigText(message)).setContentIntent(open).setOnlyAlertOnce(true).setOngoing(active);
+            .setStyle(new Notification.BigTextStyle().bigText(active
+                ? message + "\nUploads can take a while, especially on ESP32. You can leave the app or turn off the screen; uploading continues in the background. Keep the host powered on and nearby."
+                : message)).setContentIntent(open).setOnlyAlertOnce(true).setOngoing(active);
+        if (active) builder.setSubText("Uploads can take a while");
         if (active) builder.setProgress(0, 0, true);
         if (id != null) {
             Intent cancel = new Intent(this, PublishService.class).setAction(CANCEL).putExtra("id", id);
@@ -76,7 +93,6 @@ public final class PublishService extends Service {
                 final JSONObject work = job; currentId = job.getString("id");
                 int backoffSeconds = 0;
                 try {
-                    wakeLock.acquire(600000);
                     if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
                         throw new PublishTransaction.ReviewRequired("Bluetooth permission is needed. Open BWW to grant it and retry.");
                     SharedPreferences prefs = getSharedPreferences("bww", MODE_PRIVATE);
@@ -122,12 +138,17 @@ public final class PublishService extends Service {
                     int attempts = job.optInt("attempts") + 1; int seconds = (int)Math.min(30, 5L << Math.min(attempts - 1, 3)); job.put("attempts", attempts);
                     if (update(job, "queued", "Connection interrupted. Upload saved; reconnecting in " + seconds + " seconds…")) backoffSeconds = seconds;
                 } catch (Exception e) { update(job, "attention", "Upload needs review: " + e.getMessage()); }
-                finally { connection.disconnect(); currentId = ""; if (wakeLock.isHeld()) wakeLock.release(); }
+                finally { connection.disconnect(); currentId = ""; }
                 if (backoffSeconds > 0) Thread.sleep(backoffSeconds * 1000L);
             }
         } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         catch (Exception e) { notifyStatus("Upload queue needs attention: " + e.getMessage(), null, false); stopForeground(STOP_FOREGROUND_DETACH); stopSelf(); }
     }
     @Override public android.os.IBinder onBind(Intent intent) { return null; }
-    @Override public void onDestroy() { worker.shutdownNow(); connection.close(); if (wakeLock.isHeld()) wakeLock.release(); super.onDestroy(); }
+    @Override public void onDestroy() {
+        wakeHandler.removeCallbacks(renewWakeLock);
+        worker.shutdownNow(); connection.close();
+        if (wakeLock.isHeld()) wakeLock.release();
+        super.onDestroy();
+    }
 }

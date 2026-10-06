@@ -1,12 +1,14 @@
 # Android reconnects and saved uploads
 
-[Download Android 0.5.0](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Android-0.5.0.apk) and install it over the earlier app to retain accounts, drafts and website local storage.
+[Download Android 0.6.1](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Android-0.6.1.apk) and install it over the earlier app to retain accounts, drafts and website local storage.
 
 When Bluetooth drops during browsing, listing sites or opening an editor, the app shows a loading bar and makes up to two reconnect attempts to the same paired device. It does not switch to a different nearby host. Bluetooth cannot carry data while the host is out of range; the app waits for the connection to return.
 
 ## Publish and edit
 
-Tap **Publish** to save the upload privately on the phone before sending it. The editor shows an indeterminate loading bar and a status message. Close the editor or switch apps: the connected-device foreground service continues working, with a **BWW website uploads** notification. Allow notification permission to see status and the cancel action in the notification shade.
+Tap **Publish** to save the upload privately on the phone before sending it. The editor shows an indeterminate loading bar and a status message. Close the editor or switch apps: the connected-device foreground service continues working, with a **BWW website uploads** notification. Allow notification permission to see status and the cancel action in the notification shade. The notification explains that uploads can take a while, shows acknowledged bytes as chunks finish, and distinguishes transferring from saving/verifying on the host.
+
+Android **0.6.1** renews its CPU wake lock every minute for the lifetime of the upload foreground service, including reconnect waits, rather than letting it expire after ten minutes. Each renewal has a ten-minute safety timeout, and service shutdown cancels renewals and releases the lock. You can press Home, switch apps, turn the screen off or swipe BWW out of recent apps while the service continues uploading. The upload service owns a separate Bluetooth socket from the browser, so closing the activity does not close the upload socket. The wake lock is released when the service stops after finishing/cancelling the queue or pausing it for review. It does not keep the display on. Existing saved uploads and drafts are retained; no firmware update is required.
 
 An interrupted upload stays queued and reconnects after 5, 10, 20, then 30 seconds between attempts. Each connection/request also has its own timeout, so an attempt can take longer than that interval. Queued uploads survive process termination and resume when you reopen BWW; Android may also restart the service. Force-stopping the app, rebooting, or Android battery restrictions can stop or delay background work. Reopen BWW to resume it. Up to 16 uploads are retained, and uploads run one at a time.
 

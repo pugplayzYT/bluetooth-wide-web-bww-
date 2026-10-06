@@ -136,15 +136,19 @@ final class BwwConnection implements Closeable {
         if ("sync_publish".equals(request.optString("op"))) startRequest.put("expectedFingerprint", request.getString("expectedFingerprint"));
         JSONObject begin = direct(startRequest);
         String transfer = begin.getString("transfer");
+        long sent = 0;
         try {
             for (String asset : new String[]{"html", "css", "js"}) {
                 byte[] bytes = request.getString(asset).getBytes(StandardCharsets.UTF_8); int index = 0;
                 for (int start = 0; start < bytes.length; ++index) {
                     int end = SiteChunks.end(bytes, start, chunkBytes);
                     direct(new JSONObject().put("op","publish_chunk").put("token",token).put("transfer",transfer).put("asset",asset).put("index",index).put("data",SiteChunks.hex(bytes,start,end)));
+                    sent += end - start;
+                    progress.accept("Uploading " + sent + " / " + total + " bytes · " + request.getString("domain"));
                     start = end;
                 }
             }
+            progress.accept("Saving and verifying " + request.getString("domain") + " on the host…");
             return direct(new JSONObject().put("op","publish_commit").put("token",token).put("transfer",transfer));
         } catch (Exception e) {
             if (connected()) try { direct(new JSONObject().put("op","publish_cancel").put("token",token).put("transfer",transfer)); } catch (Exception ignored) { }
