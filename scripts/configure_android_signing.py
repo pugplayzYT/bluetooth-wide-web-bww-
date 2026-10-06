@@ -9,8 +9,6 @@ from pathlib import Path
 import shutil
 import subprocess
 
-DEFAULT_REPO = 'pugplayzYT/bluetooth-wide-web-bww-'
-
 def configure(bundle, repo, keytool):
     credentials = json.loads((bundle/'credentials.json').read_text())
     key = bundle/'bww-release.p12'
@@ -34,7 +32,7 @@ def configure(bundle, repo, keytool):
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bundle', type=Path, default=Path.cwd())
-    parser.add_argument('--repo', default=DEFAULT_REPO)
+    parser.add_argument('--repo', required=True, help='Target repository OWNER/NAME; use your own fork')
     parser.add_argument('--keytool', default=shutil.which('keytool') or 'keytool')
     args=parser.parse_args()
     configure(args.bundle,args.repo,args.keytool)

@@ -50,6 +50,24 @@ keytool -genkeypair -keystore C:\Private\my-bww.jks -alias my-bww -keyalg RSA -k
 
 Provide `BWW_ANDROID_KEYSTORE` (absolute path), `BWW_ANDROID_STORE_PASSWORD`, `BWW_ANDROID_KEY_ALIAS` and `BWW_ANDROID_KEY_PASSWORD` in your local build environment, then run `assembleRelease`. Keep your own key stable for your users. Your release cannot update an official installation signed by someone else's key. Fork maintainers using the official CI helper must replace `android/signing-certificate.sha256` with their own public certificate fingerprint and configure their own repository secrets.
 
+## Publish from your own fork
+
+Forks do not inherit our Actions secrets and do not need our private key. From your fork's checkout, with Python 3.10+ and a JDK installed, run this once:
+
+```powershell
+py scripts/create_android_signing.py --output "$env:USERPROFILE\BwwPrivateSigning" --init-fork --application-id com.yourname.bww
+```
+
+Replace `com.yourname.bww` with your own application ID so your app can coexist with the official app. The tool generates your own RSA-3072 private key, stores it and random passwords outside the checkout, writes only its public certificate fingerprint into `android/signing-certificate.sha256`, and bumps the Android patch version and versionCode. The version bump avoids reusing an upstream APK already copied into your fork's downloads. Existing keys are never overwritten. Run this only for initial fork setup; reuse the key for later releases.
+
+Commit the two changed public files (`android/signing-certificate.sha256` and `android/app/build.gradle`) to your fork. In **your fork's** Settings → Secrets and variables → Actions, add the same four secret names from the table above using your newly generated bundle. The values come from your own `credentials.json` and `bww-release.p12`. No upstream secret values are used. Alternatively, GitHub CLI users can run:
+
+```powershell
+py scripts/configure_android_signing.py --bundle "$env:USERPROFILE\BwwPrivateSigning" --repo YOURNAME/YOURFORK
+```
+
+Enable Actions in your fork and run Build and test on main. The workflow verifies your public certificate pin, signs with your fork's secrets, and generates download links pointing to your fork. Keep the same key for future updates. Your fork cannot update an official installation signed with our key; a separate application ID keeps both apps and their data separate.
+
 ## Versions and downloads
 
 Every Android app fix increases **both** versionName and versionCode. Packaging records a hash of the Android build inputs and rejects changed inputs under an already-published version. Rebuilding unchanged inputs reuses the immutable signed APK for that version, so packaging does not manufacture duplicate releases. Do not rotate the official key during ordinary version bumps.
