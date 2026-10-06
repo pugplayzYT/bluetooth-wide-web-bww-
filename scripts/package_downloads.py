@@ -55,9 +55,11 @@ if gradle_path.is_file() and apk_debug.is_file():
     if m:
         android_ver = m.group(1)
         dest_apk = downloads / f'Bww-Android-{android_ver}.apk'
-        if not dest_apk.is_file() or dest_apk.read_bytes() != apk_debug.read_bytes():
+        if not dest_apk.is_file():
             shutil.copy2(apk_debug, dest_apk)
             print(f'Packaged {dest_apk.name} ({dest_apk.stat().st_size} bytes)')
+        else:
+            print(f'Android {android_ver} already exists in downloads: skipping rewrite')
 
 # 3. Package Windows Sync if built
 exe = root / 'artifacts/windows-x64/Bww.Server.exe'

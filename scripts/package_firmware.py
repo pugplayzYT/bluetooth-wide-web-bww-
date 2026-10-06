@@ -21,9 +21,21 @@ output = root/'downloads'
 output.mkdir(exist_ok=True)
 
 def archive(name, contents):
-    path = output/name
+    path = output / name
+    if path.is_file():
+        try:
+            with zipfile.ZipFile(path, 'r') as z:
+                if set(z.namelist()) == set(contents.keys()):
+                    if all(z.read(k) == v for k, v in contents.items()):
+                        print(f'Unchanged {name}: skipping rewrite')
+                        return
+        except Exception:
+            pass
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
-        for entry, data in contents.items(): z.writestr(entry, data)
+        for entry, data in contents.items():
+            info = zipfile.ZipInfo(entry, (2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, data)
     with zipfile.ZipFile(path) as z:
         assert z.testzip() is None
         for entry, data in contents.items(): assert z.read(entry) == data
@@ -70,4 +82,8 @@ Physical Bluetooth/SD-card validation remains necessary; see VALIDATION.md.
 binaries['VALIDATION.md'] = (root/'VALIDATION.md').read_bytes()
 archive(f'Bww-ESP32-Binaries-{version}.zip', binaries)
 packages = sorted([*output.glob('*.zip'), *output.glob('*.apk')])
-(output/'SHA256SUMS.txt').write_text(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in packages))
+new_sums = ''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in packages)
+sums_file = output / 'SHA256SUMS.txt'
+if not sums_file.is_file() or sums_file.read_text() != new_sums:
+    sums_file.write_text(new_sums)
+    print(f'Updated SHA256SUMS.txt with {len(packages)} files.')
