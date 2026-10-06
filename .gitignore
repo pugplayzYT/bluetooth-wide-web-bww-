@@ -7,3 +7,8 @@ artifacts/
 *.user
 __pycache__/
 **/.pio/
+*.keystore
+*.jks
+*.p12
+*.pfx
+android/keystore.properties

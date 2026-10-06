@@ -1,7 +1,11 @@
 name: Build and test
 on: [push, pull_request, workflow_dispatch]
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: bww-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -26,12 +30,22 @@ jobs:
           dotnet build server -c Release --no-restore
           python3 tests/integration.py
           python3 tests/test_sd_copy.py
+          python3 tests/test_release_downloads.py
       - name: Android build and lint
         working-directory: android
         run: ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug
       - name: Package Windows server
         run: dotnet publish server -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:NuGetLockFilePath=obj/packages.publish.lock.json -o artifacts/windows-x64
-      - name: Package build downloads
+      - name: Build and verify privately signed Android release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          BWW_ANDROID_KEYSTORE_BASE64: ${{ secrets.BWW_ANDROID_KEYSTORE_BASE64 }}
+          BWW_ANDROID_STORE_PASSWORD: ${{ secrets.BWW_ANDROID_STORE_PASSWORD }}
+          BWW_ANDROID_KEY_ALIAS: ${{ secrets.BWW_ANDROID_KEY_ALIAS }}
+          BWW_ANDROID_KEY_PASSWORD: ${{ secrets.BWW_ANDROID_KEY_PASSWORD }}
+        run: python3 scripts/build_signed_android.py
+      - name: Package release downloads
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: python3 scripts/package_downloads.py
       - uses: actions/upload-artifact@v4
         with:
@@ -42,9 +56,11 @@ jobs:
           name: Bww-Android-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
       - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:
           name: downloads-build
-          path: downloads/
+          path: artifacts/downloads-build/
+          if-no-files-found: error
 
   firmware:
     runs-on: ubuntu-latest
@@ -81,39 +97,43 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: downloads-firmware
-          path: downloads/
+          path: artifacts/downloads-firmware/
+          if-no-files-found: error
 
   publish-downloads:
     needs: [build, firmware]
+    permissions:
+      contents: write
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
       - uses: actions/download-artifact@v4
         with:
           name: downloads-build
-          path: downloads
+          path: artifacts/downloads-build
       - uses: actions/download-artifact@v4
         with:
           name: downloads-firmware
-          path: downloads
-      - name: Update SHA256SUMS and commit release downloads
+          path: artifacts/downloads-firmware
+      - name: Publish verified downloads from the current main commit
+        env:
+          BUILD_REVISION: ${{ github.sha }}
         run: |
-          python3 -c "
-          import hashlib, pathlib
-          d = pathlib.Path('downloads')
-          pkgs = sorted([*d.glob('*.zip'), *d.glob('*.apk')])
-          (d / 'SHA256SUMS.txt').write_text(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in pkgs))
-          "
+          git fetch origin main
+          if [ "$(git rev-parse FETCH_HEAD)" != "$BUILD_REVISION" ]; then
+            echo "Main changed during this build; skipping outdated downloads."
+            exit 0
+          fi
+          python3 scripts/publish_downloads.py
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add downloads/
           if ! git diff --staged --quiet; then
             git commit -m "Update release downloads in downloads/ [skip ci]"
-            git pull --rebase origin main
-            git push origin main
+            git push origin HEAD:main
           else
             echo "No downloads changes to commit."
           fi

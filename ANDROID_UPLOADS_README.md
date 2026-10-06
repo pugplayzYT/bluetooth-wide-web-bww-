@@ -1,6 +1,6 @@
 # Android reconnects and saved uploads
 
-[Download Android 0.6.3](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Android-0.6.3.apk) and install it over the earlier app to retain accounts, drafts and website local storage.
+[Download the latest Android app](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/blob/main/downloads/README.md#android-app) and install it over an earlier app with the same signing certificate to retain accounts, drafts and website local storage. See [signing compatibility](ANDROID_SIGNING.md) for temporary CI-signed builds.
 
 When Bluetooth drops during browsing, listing sites or opening an editor, the app shows a loading bar and makes up to two reconnect attempts to the same paired device. It does not switch to a different nearby host. Bluetooth cannot carry data while the host is out of range; the app waits for the connection to return.
 

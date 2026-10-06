@@ -1,6 +1,6 @@
 # Bluetooth website sync
 
-[Download the Windows host and sync tool](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-Windows-Sync-0.6.1.zip) and [ESP32 firmware project 0.5.0](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-ESP32-PlatformIO-0.5.0.zip).
+[Download the Windows host and sync tool](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/blob/main/downloads/README.md#windows-server-and-bluetooth-sync) and [latest ESP32 firmware project](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/blob/main/downloads/README.md#esp32-firmware).
 
 Sync compares websites for the account you sign into on your computer and ESP32. It lists PC-only sites, device-only sites, and sites with different contents. For each difference, choose PC → device, device → PC, or skip. It then shows the selected changes and asks you to type `APPLY` before transferring anything.
 

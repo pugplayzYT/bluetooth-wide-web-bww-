@@ -2,6 +2,7 @@
 """Package built ESP32 firmware, matching ELF and standalone PlatformIO sources."""
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -10,6 +11,7 @@ import zipfile
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--framework', type=Path, default=Path(os.environ.get('PLATFORMIO_CORE_DIR', str(Path.home()/'.platformio')))/'packages/framework-arduinoespressif32')
+parser.add_argument('--output', type=Path, default=root/'artifacts/downloads-firmware')
 args = parser.parse_args()
 version = re.search(r'FIRMWARE_VERSION = "([^"]+)"', (root/'esp32/include/BwwConfig.h').read_text()).group(1)
 build = root/'esp32/.pio/build/esp32dev'
@@ -17,8 +19,8 @@ firmware = (build/'firmware.bin').read_bytes()
 elf = (build/'firmware.elf').read_bytes()
 assert firmware[0] == 0xE9 and elf[:4] == b'\x7fELF'
 assert firmware[0xb0:0xd0] == hashlib.sha256(elf).digest(), 'ELF does not match firmware image'
-output = root/'downloads'
-output.mkdir(exist_ok=True)
+output = args.output
+output.mkdir(parents=True, exist_ok=True)
 
 def archive(name, contents):
     path = output / name
@@ -81,9 +83,9 @@ Physical Bluetooth/SD-card validation remains necessary; see VALIDATION.md.
 '''.encode()
 binaries['VALIDATION.md'] = (root/'VALIDATION.md').read_bytes()
 archive(f'Bww-ESP32-Binaries-{version}.zip', binaries)
-packages = sorted([*output.glob('*.zip'), *output.glob('*.apk')])
-new_sums = ''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in packages)
-sums_file = output / 'SHA256SUMS.txt'
-if not sums_file.is_file() or sums_file.read_text() != new_sums:
-    sums_file.write_text(new_sums)
-    print(f'Updated SHA256SUMS.txt with {len(packages)} files.')
+files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(output.glob('*.zip'))}
+expected = {f'Bww-ESP32-PlatformIO-{version}.zip', f'Bww-ESP32-Binaries-{version}.zip'}
+if set(files) != expected:
+    raise ValueError('Firmware artifact directory contains unexpected packages')
+(output/'firmware-manifest.json').write_text(json.dumps({'files': files, 'firmware': {'version': version,
+    'sourceFile': f'Bww-ESP32-PlatformIO-{version}.zip', 'binaryFile': f'Bww-ESP32-Binaries-{version}.zip'}}, indent=2) + '\n')

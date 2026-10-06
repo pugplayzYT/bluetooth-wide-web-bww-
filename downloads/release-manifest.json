@@ -1,0 +1,22 @@
+{
+  "android": {
+    "version": "0.6.4",
+    "versionCode": 12,
+    "file": "Bww-Android-0.6.4.apk",
+    "sha256": "8e9b5abccc4cfe69c8610315b064b0366ace77705a8f0c8aa9d3ba9d6ee4e662",
+    "sourceHash": "83d66b326ef35dbbc017929551ff24c450441a70ba64082253741b4dd3137e5c",
+    "certificateSha256": "947c02515d123adca43ef1b3ce04c6c0ebb590c89db7fe31f290636c6a1c22d0"
+  },
+  "windows": {
+    "version": "0.6.2",
+    "file": "Bww-Windows-Sync-0.6.2.zip"
+  },
+  "sdCopy": {
+    "file": "Bww-SD-Copy.zip"
+  },
+  "firmware": {
+    "version": "0.6.2",
+    "sourceFile": "Bww-ESP32-PlatformIO-0.6.2.zip",
+    "binaryFile": "Bww-ESP32-Binaries-0.6.2.zip"
+  }
+}

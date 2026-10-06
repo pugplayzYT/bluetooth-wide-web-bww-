@@ -27,7 +27,7 @@ Vin is commonly approximately 5 V on a USB-powered development board. A bare SD 
 
 ## Build, flash, and pair
 
-[Download the ESP32-only PlatformIO project (version 0.6.2)](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/raw/refs/heads/main/downloads/Bww-ESP32-PlatformIO-0.6.2.zip). Extract the ZIP, then open its `esp32` folder in VS Code. This download contains the firmware source and configuration; host-side tests require the full repository.
+[Download the latest ESP32-only PlatformIO project](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/blob/main/downloads/README.md#esp32-firmware). Extract the ZIP, then open its `esp32` folder in VS Code. This download contains the firmware source and configuration; host-side tests require the full repository.
 
 Version **0.6.1** sets the same **50-websites-per-account** quota as the PC server while retaining the SD-backed index and removing the old separate 24-websites-per-device limit. Website records live in checksummed SD catalog pages containing at most eight entries, with three page slots protecting the active snapshot, fallback snapshot and pending write. Total website storage depends on detected free SD space, with a 128 KiB reserve for metadata and recovery. The existing 12-account limit still applies. Existing over-quota collections from 0.6.0 are kept and can be edited or deleted; only new domains are refused at/above 50. Individual sites retain the 512 KiB limit; the 12-account and session/client limits still apply. All 0.5.2 crash/commit memory protections remain included.
 
@@ -37,7 +37,7 @@ Version **0.5.1** patches the upload-start cleanup memory problem seen in `prune
 
 The patch keeps GPIO5/18/23/19 wiring, three Bluetooth clients, the 512 KiB site limit, and existing SD accounts/site content. It also includes 0.5.0 conditional publication, so Android 0.5.0 can safely retry interrupted uploads. Updating firmware does not format the card.
 
-[Download prebuilt ESP32 0.6.2 binaries](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-ESP32-Binaries-0.6.2.zip) if you prefer flashing without compiling. The ZIP includes `firmware.bin`, the matching `firmware.elf` for crash decoding, and upgrade instructions. For VS Code/PlatformIO, use the source ZIP above: extract it, open **its `esp32` folder**, close the serial monitor, and click **Upload**. Replacing files alone does not flash the board. Confirm `firmware 0.6.2` and `READY Bluetooth` afterward.
+[Download the latest prebuilt ESP32 binaries](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/blob/main/downloads/README.md#esp32-firmware) if you prefer flashing without compiling. The ZIP includes `firmware.bin`, the matching `firmware.elf` for crash decoding, and upgrade instructions. For VS Code/PlatformIO, use the source ZIP above: extract it, open **its `esp32` folder**, close the serial monitor, and click **Upload**. Replacing files alone does not flash the board. Confirm `firmware 0.6.2` and `READY Bluetooth` afterward.
 
 Version 0.5.0 adds authenticated account website comparison and conditional Bluetooth sync from the Windows host. [The sync guide](../SYNC_README.md) covers device selection/pairing, reviewing differences, choosing transfer directions and approving changes. Existing accounts/sites remain compatible; Android does not need an update. Passwords and sessions are not copied. Earlier startup, password-hashing and receive-queue fixes remain included.
 

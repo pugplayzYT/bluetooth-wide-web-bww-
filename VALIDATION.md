@@ -1,5 +1,13 @@
 # Validation
 
+## Private release signing and download publication 0.6.4
+
+Android release builds now receive signing material only through environment variables supplied from GitHub Actions repository secrets. The CI helper uses a private temporary keystore, removes it after building, and verifies the APK against the pinned public certificate. The retained original key preserves update compatibility for original downloads through 0.6.1; temporary-runner 0.6.2/0.6.3 keys cannot be replaced without affecting update compatibility. Local debug builds use their own key and the separate dev.bww.dev application ID.
+
+The signed 0.6.4 release built and passed apksigner verification with the original 947c0251… certificate. Debug and instrumentation APKs built, all 27 Android JVM tests passed, lint passed, and all seven PC protocol tests passed. Nine release regression tests verify disjoint package merging, latest-index generation, checksum/missing-file/path rejection, signing-certificate rejection, immutable same-version APK reuse, changed-input version enforcement and versionCode growth. A missing-secret negative check blocks release building. Firmware and Windows executable code is unchanged; their packages were verified, with documentation refreshed. Physical install-over and background behavior were not tested here.
+
+Build and firmware jobs now upload only their own package folders. The publisher verifies manifest checksums before writing, rejects overlapping artifacts, creates the latest-download README/manifest/checksums, and refuses to publish outdated builds after main advances. Publication uses a fast-forward push, without rebasing artifacts onto newer source. No tags are created. GitHub secret setup could not be executed from this environment because GitHub API access to Actions secrets/public-key is forbidden; the private setup bundle and installer are supplied separately, outside the repository.
+
 ## Android Settings UI and dark mode fixes 0.6.3
 
 Android 0.6.3 fixes App Settings dialog theming when toggling dark mode live. The dialog window background updates dynamically between light (#FFFFFF) and dark (#1A2421) with rounded insets and subtle stroke borders. The dialog custom title and action buttons update in real time. The toggle switch receives high-contrast stateful track and thumb tints with disabled split-track, ensuring the switch track pill is clearly visible in both light and dark mode.

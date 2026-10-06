@@ -1,5 +1,6 @@
 d87df945d5f35c6628dee859f5b5a712f12ffaa2ad9c55ea9ae8dd96321f1f6e  Bww-Android-0.6.3.apk
-f0e1978a7d53a2732f39afeeef3b1f77182377a6b3d0291f7176fa4053356606  Bww-ESP32-Binaries-0.6.2.zip
-d3a0927a1bd14731bc803d39baf7efab09fe235a406110f8ab69fd3bbcb74d21  Bww-ESP32-PlatformIO-0.6.2.zip
-a383001978db15c15f6395c30220d66dd1d15d3d3c9293e2400d58973053d899  Bww-SD-Copy.zip
-d68f7285ba5c1fda972e2b95c1d85da8e4fff5fce36d61096ef6c64dcee8752e  Bww-Windows-Sync-0.6.2.zip
+8e9b5abccc4cfe69c8610315b064b0366ace77705a8f0c8aa9d3ba9d6ee4e662  Bww-Android-0.6.4.apk
+c7aab18e44358e9299ee79bf5ee42833de38815ef3963602ece7f637e857517b  Bww-ESP32-Binaries-0.6.2.zip
+d4e0dde350afff8bbab0e39f81dfe8d6f415cb781ac4afb394f110e4a2042ddb  Bww-ESP32-PlatformIO-0.6.2.zip
+c9b7d8f70eedd0669ac734f14eb54c32d0958dab2fe421dacecdd80b6b8ab9a5  Bww-SD-Copy.zip
+a68375c1e677e0b0277eee0b7175d17c4c03639b33541d1ba4c3b79d7c3fd3c6  Bww-Windows-Sync-0.6.2.zip

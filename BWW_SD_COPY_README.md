@@ -2,7 +2,7 @@
 
 Copy your Bluetooth-wide Web websites and accounts **between the Windows C# server and an ESP32 SD card**. The tool converts their different storage formats, including the firmware's 512 KiB chunked sites. It never formats a drive, accesses a raw disk, or copies unrelated files from your card.
 
-[Download the small tool ZIP](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/downloads/Bww-SD-Copy.zip) · [Download Python script only](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/bww_sd_copy.py)
+[Download the small tool ZIP](https://github.com/pugplayzYT/bluetooth-wide-web-bww-/blob/main/downloads/README.md#sd-copy-tool) · [Download Python script only](https://raw.githubusercontent.com/pugplayzYT/bluetooth-wide-web-bww-/main/bww_sd_copy.py)
 
 ## Run on Windows
 
